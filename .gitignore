@@ -6,3 +6,5 @@ _build/
 .pytest_cache/
 output/
 *.db
+.coverage
+htmlcov/
