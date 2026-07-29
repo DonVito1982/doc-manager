@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "documentos"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Gestor de documentos para firmas de ingenieria"
+authors = [{name = "Don Vito"}]
+readme = "README.md"
+
+dependencies = [
+    "click",
+    "pyyaml",
+    "jinja2",
+    "pypandoc",
+    "flask",
+    "sqlalchemy",
+    "watchdog",
+    "flask-socketio",
+    "python-frontmatter",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.scripts]
+documentos = "documentos.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
