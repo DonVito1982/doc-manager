@@ -8,15 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from documentos.build.collector import (
-    RECOGNIZED_SUFFIXES,
-    SourceFile,
-    _detect_format,
-    _parse_frontmatter_ipynb,
-    _parse_frontmatter_md,
-    _should_skip,
-    collect,
-)
+from documentos.build.collector import RECOGNIZED_SUFFIXES, SourceFile, collect
 from documentos.config import ProjectConfig
 
 
@@ -41,8 +33,17 @@ def populate(project_config: ProjectConfig) -> Generator[ProjectConfig, None, No
     yield project_config
 
 
+def _minimal_notebook(cells: list[dict], metadata: dict | None = None) -> str:
+    metadata = metadata or {}
+    return json.dumps(
+        {"cells": cells, "metadata": metadata, "nbformat": 4, "nbformat_minor": 2}
+    )
+
+
 class TestSourceFile:
-    """Tests for the SourceFile dataclass."""
+    """Tests for the SourceFile dataclass and its public methods."""
+
+    # -- fields -----------------------------------------------------------
 
     def test_fields_exist(self):
         sf = SourceFile(path=Path("a.md"), format="md", frontmatter={})
@@ -51,135 +52,126 @@ class TestSourceFile:
         assert sf.frontmatter == {}
 
     def test_default_frontmatter_is_empty(self):
-        sf = SourceFile(path=Path("a.md"), format="md", frontmatter={})
+        sf = SourceFile(path=Path("a.md"), format="md")
         assert sf.frontmatter == {}
 
+    # -- should_skip ------------------------------------------------------
 
-class TestDetectFormat:
-    """Tests for the _detect_format helper."""
+    def test_should_skip_dot_prefix(self):
+        assert SourceFile.should_skip(".hidden") is True
 
-    def test_md_extension(self):
-        assert _detect_format(Path("file.md")) == "md"
+    def test_should_skip_underscore_prefix(self):
+        assert SourceFile.should_skip("_draft") is True
 
-    def test_md_j2_double_extension(self):
-        assert _detect_format(Path("template.md.j2")) == "md.j2"
+    def test_should_skip_normal_name(self):
+        assert SourceFile.should_skip("visible") is False
 
-    def test_ipynb_extension(self):
-        assert _detect_format(Path("notebook.ipynb")) == "ipynb"
+    # -- detect_format ----------------------------------------------------
 
-    def test_adoc_extension(self):
-        assert _detect_format(Path("document.adoc")) == "adoc"
+    def test_detect_format_md(self):
+        assert SourceFile.detect_format(Path("file.md")) == "md"
 
-    def test_unrecognized_extension(self):
-        assert _detect_format(Path("notes.txt")) is None
-        assert _detect_format(Path("doc.rst")) is None
+    def test_detect_format_md_j2(self):
+        assert SourceFile.detect_format(Path("template.md.j2")) == "md.j2"
 
-    def test_no_extension(self):
-        assert _detect_format(Path("README")) is None
+    def test_detect_format_ipynb(self):
+        assert SourceFile.detect_format(Path("notebook.ipynb")) == "ipynb"
 
+    def test_detect_format_adoc(self):
+        assert SourceFile.detect_format(Path("document.adoc")) == "adoc"
 
-class TestShouldSkip:
-    """Tests for the _should_skip helper."""
+    def test_detect_format_unrecognized(self):
+        assert SourceFile.detect_format(Path("notes.txt")) is None
 
-    def test_dot_prefix(self):
-        assert _should_skip(".hidden") is True
+    def test_detect_format_no_extension(self):
+        assert SourceFile.detect_format(Path("README")) is None
 
-    def test_underscore_prefix(self):
-        assert _should_skip("_draft") is True
+    # -- parse_frontmatter (md / md.j2) -----------------------------------
 
-    def test_normal_name(self):
-        assert _should_skip("visible") is False
-
-
-class TestParseFrontmatterMd:
-    """Tests for _parse_frontmatter_md."""
-
-    def test_with_frontmatter(self, tmp_path: Path):
+    def test_parse_frontmatter_md_with_metadata(self, tmp_path: Path):
         file = tmp_path / "doc.md"
         file.write_text("---\ntitle: Hello\nauthor: Alice\n---\n# Content")
-        result = _parse_frontmatter_md(file)
-        assert result == {"title": "Hello", "author": "Alice"}
+        sf = SourceFile(path=Path("content/doc.md"), format="md")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {"title": "Hello", "author": "Alice"}
 
-    def test_without_frontmatter(self, tmp_path: Path):
+    def test_parse_frontmatter_md_without_metadata(self, tmp_path: Path):
         file = tmp_path / "doc.md"
         file.write_text("# Just content\nSome text")
-        result = _parse_frontmatter_md(file)
-        assert result == {}
+        sf = SourceFile(path=Path("content/doc.md"), format="md")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {}
 
-    def test_empty_file(self, tmp_path: Path):
+    def test_parse_frontmatter_md_empty_file(self, tmp_path: Path):
         file = tmp_path / "doc.md"
         file.write_text("")
-        result = _parse_frontmatter_md(file)
-        assert result == {}
+        sf = SourceFile(path=Path("content/doc.md"), format="md")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {}
 
+    def test_parse_frontmatter_md_j2(self, tmp_path: Path):
+        file = tmp_path / "template.md.j2"
+        file.write_text("---\ntitle: Jinja\n---\n{{ content }}")
+        sf = SourceFile(path=Path("content/template.md.j2"), format="md.j2")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {"title": "Jinja"}
 
-class TestParseFrontmatterIpynb:
-    """Tests for _parse_frontmatter_ipynb."""
+    # -- parse_frontmatter (ipynb) ----------------------------------------
 
-    def _minimal_notebook(self, cells: list[dict], metadata: dict | None = None) -> str:
-        metadata = metadata or {}
-        return json.dumps(
-            {"cells": cells, "metadata": metadata, "nbformat": 4, "nbformat_minor": 2}
-        )
-
-    def test_title_from_first_markdown_cell(self, tmp_path: Path):
-        nb = self._minimal_notebook(
-            cells=[
-                {"cell_type": "markdown", "source": ["# Introduction"]},
-                {"cell_type": "code", "source": ["print(1)"]},
-            ]
+    def test_parse_frontmatter_ipynb_title(self, tmp_path: Path):
+        nb = _minimal_notebook(
+            [{"cell_type": "markdown", "source": ["# Introduction"]}],
         )
         file = tmp_path / "notebook.ipynb"
         file.write_text(nb)
-        result = _parse_frontmatter_ipynb(file)
-        assert result["title"] == "Introduction"
+        sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {"title": "Introduction"}
 
-    def test_title_from_multiline_source(self, tmp_path: Path):
-        nb = self._minimal_notebook(
-            cells=[
-                {"cell_type": "markdown", "source": ["# ", "My Title"]},
-            ]
+    def test_parse_frontmatter_ipynb_multiline_title(self, tmp_path: Path):
+        nb = _minimal_notebook(
+            [{"cell_type": "markdown", "source": ["# ", "My Title"]}],
         )
         file = tmp_path / "notebook.ipynb"
         file.write_text(nb)
-        result = _parse_frontmatter_ipynb(file)
-        assert result["title"] == "My Title"
+        sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter["title"] == "My Title"
 
-    def test_author_from_metadata(self, tmp_path: Path):
-        nb = self._minimal_notebook(
-            cells=[{"cell_type": "markdown", "source": ["# Title"]}],
+    def test_parse_frontmatter_ipynb_author(self, tmp_path: Path):
+        nb = _minimal_notebook(
+            [{"cell_type": "markdown", "source": ["# Title"]}],
             metadata={"author": "Bob"},
         )
         file = tmp_path / "notebook.ipynb"
         file.write_text(nb)
-        result = _parse_frontmatter_ipynb(file)
-        assert result["author"] == "Bob"
-        assert result["title"] == "Title"
+        sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {"title": "Title", "author": "Bob"}
 
-    def test_no_markdown_cells(self, tmp_path: Path):
-        nb = self._minimal_notebook(
-            cells=[{"cell_type": "code", "source": ["print(1)"]}],
-        )
+    def test_parse_frontmatter_ipynb_no_markdown(self, tmp_path: Path):
+        nb = _minimal_notebook([{"cell_type": "code", "source": ["print(1)"]}])
         file = tmp_path / "notebook.ipynb"
         file.write_text(nb)
-        result = _parse_frontmatter_ipynb(file)
-        assert result == {}
+        sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {}
 
-    def test_no_author_in_metadata(self, tmp_path: Path):
-        nb = self._minimal_notebook(
-            cells=[{"cell_type": "markdown", "source": ["# Title"]}],
-        )
-        file = tmp_path / "notebook.ipynb"
-        file.write_text(nb)
-        result = _parse_frontmatter_ipynb(file)
-        assert "author" not in result
-        assert result["title"] == "Title"
-
-    def test_invalid_json(self, tmp_path: Path):
+    def test_parse_frontmatter_ipynb_invalid_json(self, tmp_path: Path):
         file = tmp_path / "notebook.ipynb"
         file.write_text("not valid json")
-        result = _parse_frontmatter_ipynb(file)
-        assert result == {}
+        sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {}
+
+    # -- parse_frontmatter (adoc) -----------------------------------------
+
+    def test_parse_frontmatter_adoc(self, tmp_path: Path):
+        file = tmp_path / "doc.adoc"
+        file.write_text("= Title\nContent")
+        sf = SourceFile(path=Path("content/doc.adoc"), format="adoc")
+        sf.parse_frontmatter(file)
+        assert sf.frontmatter == {}
 
 
 class TestCollect:
@@ -238,7 +230,10 @@ class TestCollect:
         results = collect(project_config)
         assert len(results) == 1
         assert results[0].format == "ipynb"
-        assert results[0].frontmatter == {"title": "Notebook Title", "author": "Carlos"}
+        assert results[0].frontmatter == {
+            "title": "Notebook Title",
+            "author": "Carlos",
+        }
 
     def test_collects_adoc(self, project_config: ProjectConfig, tmp_path: Path):
         content = tmp_path / "content"
@@ -248,7 +243,9 @@ class TestCollect:
         assert results[0].format == "adoc"
         assert results[0].frontmatter == {}
 
-    def test_ignores_hidden_files(self, project_config: ProjectConfig, tmp_path: Path):
+    def test_ignores_hidden_files(
+        self, project_config: ProjectConfig, tmp_path: Path
+    ):
         content = tmp_path / "content"
         (content / ".hidden.md").write_text("---\ntitle: Hidden\n---\n# nope")
         (content / "_draft.md").write_text("# Draft")
@@ -283,7 +280,9 @@ class TestCollect:
         assert len(results) == 1
         assert results[0].format == "md"
 
-    def test_sorted_alphabetically(self, project_config: ProjectConfig, tmp_path: Path):
+    def test_sorted_alphabetically(
+        self, project_config: ProjectConfig, tmp_path: Path
+    ):
         content = tmp_path / "content"
         (content / "zebra.md").write_text("# Z")
         (content / "alpha.md").write_text("# A")

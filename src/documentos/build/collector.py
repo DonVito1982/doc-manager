@@ -7,7 +7,7 @@ their metadata, leaving them ready for downstream processing.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import frontmatter
@@ -35,15 +35,63 @@ class SourceFile:
 
     path: Path
     format: str
-    frontmatter: dict
+    frontmatter: dict = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def should_skip(name: str) -> bool:
+        """Check whether a file or directory name should be ignored.
+
+        Files and directories whose name starts with ``.`` or ``_`` are
+        considered drafts or hidden and are excluded from collection.
+        """
+        return name.startswith(".") or name.startswith("_")
+
+    @classmethod
+    def detect_format(cls, file_path: Path) -> str | None:
+        """Detect the source format of a file based on its extension.
+
+        Args:
+            file_path: Filesystem path whose name is inspected.
+
+        Returns:
+            One of ``"md"``, ``"md.j2"``, ``"ipynb"``, ``"adoc"``, or
+            ``None`` for unrecognised extensions.
+        """
+        name = file_path.name
+        for suffix, fmt in RECOGNIZED_SUFFIXES.items():
+            if name.endswith(suffix):
+                return fmt
+        return None
+
+    def parse_frontmatter(self, file_path: Path) -> None:
+        """Parse frontmatter from the filesystem and update
+        ``self.frontmatter``.
+
+        Parsing strategy depends on ``self.format``:
+
+        - ``"md"`` / ``"md.j2"``: YAML frontmatter via ``python-frontmatter``.
+        - ``"ipynb"``: title from the first markdown cell, author from
+          notebook metadata.
+        - ``"adoc"``: empty dict (AsciiDoc attribute parsing deferred).
+
+        Args:
+            file_path: Absolute filesystem path to the source file.
+        """
+        if self.format in ("md", "md.j2"):
+            self.frontmatter = _parse_frontmatter_md(file_path)
+        elif self.format == "ipynb":
+            self.frontmatter = _parse_frontmatter_ipynb(file_path)
+        else:
+            self.frontmatter = {}
 
 
-def _detect_format(file_path: Path) -> str | None:
-    name = file_path.name
-    for suffix, fmt in RECOGNIZED_SUFFIXES.items():
-        if name.endswith(suffix):
-            return fmt
-    return None
+# ------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------
 
 
 def _parse_frontmatter_md(file_path: Path) -> dict:
@@ -88,8 +136,9 @@ def _parse_frontmatter_ipynb(file_path: Path) -> dict:
     return result
 
 
-def _should_skip(name: str) -> bool:
-    return name.startswith(".") or name.startswith("_")
+# ------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------
 
 
 def collect(config: ProjectConfig) -> list[SourceFile]:
@@ -116,21 +165,16 @@ def collect(config: ProjectConfig) -> list[SourceFile]:
             continue
 
         relative = item_path.relative_to(config.root)
-        if any(_should_skip(part) for part in relative.parts):
+        if any(SourceFile.should_skip(part) for part in relative.parts):
             continue
 
-        fmt = _detect_format(item_path)
+        fmt = SourceFile.detect_format(item_path)
         if fmt is None:
             continue
 
-        if fmt in ("md", "md.j2"):
-            fm = _parse_frontmatter_md(item_path)
-        elif fmt == "ipynb":
-            fm = _parse_frontmatter_ipynb(item_path)
-        else:
-            fm = {}
-
-        result.append(SourceFile(path=relative, format=fmt, frontmatter=fm))
+        sf = SourceFile(path=relative, format=fmt)
+        sf.parse_frontmatter(item_path)
+        result.append(sf)
 
     result.sort(key=lambda sf: sf.path)
     return result
