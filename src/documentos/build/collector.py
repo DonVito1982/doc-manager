@@ -67,7 +67,7 @@ class SourceFile:
                 return fmt
         return None
 
-    def parse_frontmatter(self, file_path: Path) -> None:
+    def parse_frontmatter(self, root: Path) -> None:
         """Parse frontmatter from the filesystem and update
         ``self.frontmatter``.
 
@@ -79,8 +79,10 @@ class SourceFile:
         - ``"adoc"``: empty dict (AsciiDoc attribute parsing deferred).
 
         Args:
-            file_path: Absolute filesystem path to the source file.
+            root: Absolute path to the project root directory.  The
+                concrete file path is resolved as ``root / self.path``.
         """
+        file_path = root / self.path
         if self.format in ("md", "md.j2"):
             self.frontmatter = _parse_frontmatter_md(file_path)
         elif self.format == "ipynb":
@@ -173,7 +175,7 @@ def collect(config: ProjectConfig) -> list[SourceFile]:
             continue
 
         sf = SourceFile(path=relative, format=fmt)
-        sf.parse_frontmatter(item_path)
+        sf.parse_frontmatter(config.root)
         result.append(sf)
 
     result.sort(key=lambda sf: sf.path)

@@ -89,88 +89,108 @@ class TestSourceFile:
     # -- parse_frontmatter (md / md.j2) -----------------------------------
 
     def test_parse_frontmatter_md_with_metadata(self, tmp_path: Path):
-        file = tmp_path / "doc.md"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "doc.md"
         file.write_text("---\ntitle: Hello\nauthor: Alice\n---\n# Content")
         sf = SourceFile(path=Path("content/doc.md"), format="md")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {"title": "Hello", "author": "Alice"}
 
     def test_parse_frontmatter_md_without_metadata(self, tmp_path: Path):
-        file = tmp_path / "doc.md"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "doc.md"
         file.write_text("# Just content\nSome text")
         sf = SourceFile(path=Path("content/doc.md"), format="md")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {}
 
     def test_parse_frontmatter_md_empty_file(self, tmp_path: Path):
-        file = tmp_path / "doc.md"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "doc.md"
         file.write_text("")
         sf = SourceFile(path=Path("content/doc.md"), format="md")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {}
 
     def test_parse_frontmatter_md_j2(self, tmp_path: Path):
-        file = tmp_path / "template.md.j2"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "template.md.j2"
         file.write_text("---\ntitle: Jinja\n---\n{{ content }}")
         sf = SourceFile(path=Path("content/template.md.j2"), format="md.j2")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {"title": "Jinja"}
 
     # -- parse_frontmatter (ipynb) ----------------------------------------
 
     def test_parse_frontmatter_ipynb_title(self, tmp_path: Path):
+        content = tmp_path / "content"
+        content.mkdir()
         nb = _minimal_notebook(
             [{"cell_type": "markdown", "source": ["# Introduction"]}],
         )
-        file = tmp_path / "notebook.ipynb"
+        file = content / "notebook.ipynb"
         file.write_text(nb)
         sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {"title": "Introduction"}
 
     def test_parse_frontmatter_ipynb_multiline_title(self, tmp_path: Path):
+        content = tmp_path / "content"
+        content.mkdir()
         nb = _minimal_notebook(
             [{"cell_type": "markdown", "source": ["# ", "My Title"]}],
         )
-        file = tmp_path / "notebook.ipynb"
+        file = content / "notebook.ipynb"
         file.write_text(nb)
         sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter["title"] == "My Title"
 
     def test_parse_frontmatter_ipynb_author(self, tmp_path: Path):
+        content = tmp_path / "content"
+        content.mkdir()
         nb = _minimal_notebook(
             [{"cell_type": "markdown", "source": ["# Title"]}],
             metadata={"author": "Bob"},
         )
-        file = tmp_path / "notebook.ipynb"
+        file = content / "notebook.ipynb"
         file.write_text(nb)
         sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {"title": "Title", "author": "Bob"}
 
     def test_parse_frontmatter_ipynb_no_markdown(self, tmp_path: Path):
+        content = tmp_path / "content"
+        content.mkdir()
         nb = _minimal_notebook([{"cell_type": "code", "source": ["print(1)"]}])
-        file = tmp_path / "notebook.ipynb"
+        file = content / "notebook.ipynb"
         file.write_text(nb)
         sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {}
 
     def test_parse_frontmatter_ipynb_invalid_json(self, tmp_path: Path):
-        file = tmp_path / "notebook.ipynb"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "notebook.ipynb"
         file.write_text("not valid json")
         sf = SourceFile(path=Path("content/notebook.ipynb"), format="ipynb")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {}
 
     # -- parse_frontmatter (adoc) -----------------------------------------
 
     def test_parse_frontmatter_adoc(self, tmp_path: Path):
-        file = tmp_path / "doc.adoc"
+        content = tmp_path / "content"
+        content.mkdir()
+        file = content / "doc.adoc"
         file.write_text("= Title\nContent")
         sf = SourceFile(path=Path("content/doc.adoc"), format="adoc")
-        sf.parse_frontmatter(file)
+        sf.parse_frontmatter(tmp_path)
         assert sf.frontmatter == {}
 
 
