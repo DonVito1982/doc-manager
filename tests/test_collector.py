@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from documentos.build.collector import RECOGNIZED_SUFFIXES, SourceFile, collect
+from documentos.build.collector import (
+    RECOGNIZED_SUFFIXES,
+    SourceFile,
+    _parse_frontmatter_md,
+    collect,
+)
 from documentos.config import ProjectConfig
 
 
@@ -352,3 +357,53 @@ class TestRecognizedSuffixes:
             ".ipynb": "ipynb",
             ".adoc": "adoc",
         }
+
+
+# ---------------------------------------------------------------------------
+# Edge-case coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseFrontmatterEdgeCases:
+    """Cover internal branches of _parse_frontmatter_md and _parse_frontmatter_ipynb."""
+
+    def test_parse_frontmatter_md_exception_triggers_empty_dict(
+        self, tmp_path: Path
+    ) -> None:
+        """Passing a directory (not a file) to _parse_frontmatter_md triggers
+        the broad except and returns {}."""
+        dir_path = tmp_path / "content"
+        dir_path.mkdir()
+        result = _parse_frontmatter_md(dir_path)
+        assert result == {}
+
+    def test_parse_frontmatter_ipynb_string_source(self, tmp_path: Path) -> None:
+        """Notebook with source as a plain string (not a list of strings) still
+        parses the title."""
+        content = tmp_path / "content"
+        content.mkdir()
+        nb = _minimal_notebook(
+            [{"cell_type": "markdown", "source": "# String Title"}],
+        )
+        # Override _minimal_notebook so that source is a string
+        nb_data = json.loads(nb)
+        nb_data["cells"][0]["source"] = "# String Title"
+        file = content / "nb.ipynb"
+        file.write_text(json.dumps(nb_data))
+        sf = SourceFile(path=Path("content/nb.ipynb"), format="ipynb")
+        sf.parse_frontmatter(tmp_path)
+        assert sf.frontmatter["title"] == "String Title"
+
+    def test_parse_frontmatter_ipynb_no_h1_heading(self, tmp_path: Path) -> None:
+        """Markdown cell without a '# ' prefix: title falls back to the first
+        line, stripping leading '#' characters."""
+        content = tmp_path / "content"
+        content.mkdir()
+        nb = _minimal_notebook(
+            [{"cell_type": "markdown", "source": ["## Subtitle\n", "More text\n"]}],
+        )
+        file = content / "nb.ipynb"
+        file.write_text(nb)
+        sf = SourceFile(path=Path("content/nb.ipynb"), format="ipynb")
+        sf.parse_frontmatter(tmp_path)
+        assert sf.frontmatter["title"] == "Subtitle"

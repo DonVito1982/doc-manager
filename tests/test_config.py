@@ -414,3 +414,32 @@ def test_load_config_formats_case_sensitive(tmp_path: Path) -> None:
     _create_required_dirs(tmp_path)
     with pytest.raises(ConfigError, match="Unsupported output format"):
         load_config(config_path)
+
+
+# ---------------------------------------------------------------------------
+# Edge-case coverage: non-list values for list-typed fields
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_output_formats_is_string(tmp_path: Path) -> None:
+    """If output.formats is a string instead of a list, fall back to defaults."""
+    config_path = tmp_path / "config.yml"
+    _write_yaml(
+        config_path,
+        "project:\n  title: \"Test\"\noutput:\n  formats: html\n",
+    )
+    _create_required_dirs(tmp_path)
+    cfg = load_config(config_path)
+    assert cfg.output.formats == ["html", "pdf", "epub"]
+
+
+def test_load_config_data_files_is_string(tmp_path: Path) -> None:
+    """If data.files is a string instead of a list, fall back to empty list."""
+    config_path = tmp_path / "config.yml"
+    _write_yaml(
+        config_path,
+        "project:\n  title: \"Test\"\ndata:\n  files: single.csv\n",
+    )
+    _create_required_dirs(tmp_path)
+    cfg = load_config(config_path)
+    assert cfg.data.files == []
