@@ -195,6 +195,25 @@ class TestBuild:
         finally:
             os.chdir(cwd)
 
+    def test_build_with_config_error_from_validation(
+        self, runner: CliRunner, tmp_path: Path
+    ):
+        """build shows error when config.yml exists but required dirs are missing."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        # Write a valid config.yml but do NOT create content/data/templates dirs
+        config_path = proj / "config.yml"
+        config_path.write_text("project:\n  title: \"Un proyecto\"\n", encoding="utf-8")
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code != 0
+            assert "Missing required director" in result.output
+        finally:
+            os.chdir(cwd)
+
 
 # ---------------------------------------------------------------------------
 # serve
