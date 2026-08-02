@@ -139,8 +139,8 @@ def preprocess(source: SourceFile, context: DataContext) -> str:
         return source.path.read_text(encoding="utf-8")
 
     template_text = source.path.read_text(encoding="utf-8")
-    env = Environment(undefined=StrictUndefined, keep_trailing_newline=True)
-    template = env.from_string(template_text)
+    jinja_env = Environment(undefined=StrictUndefined, keep_trailing_newline=True)
+    template = jinja_env.from_string(template_text)
 
     template_vars = {
         "project": _to_template_dict(context.project),
