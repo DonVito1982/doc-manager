@@ -111,6 +111,7 @@ class DatabaseSection:
     """Database connection configuration."""
 
     url: str = DEFAULT_DATABASE_URL
+    data_queries: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -313,8 +314,18 @@ def _parse_templates(raw: dict | None) -> TemplatesSection:
 def _parse_database(raw: dict | None) -> DatabaseSection:
     if not isinstance(raw, dict):
         return DatabaseSection()
+    queries = raw.get("data_queries", [])
+    if not isinstance(queries, list):
+        queries = []
+    else:
+        queries = [
+            {"alias": str(q["alias"]), "sql": str(q["sql"])}
+            for q in queries
+            if isinstance(q, dict) and "alias" in q and "sql" in q
+        ]
     return DatabaseSection(
         url=str(raw.get("url", DEFAULT_DATABASE_URL)),
+        data_queries=queries,
     )
 
 
@@ -411,6 +422,7 @@ def _config_to_dict(config: ProjectConfig) -> dict:
         },
         "database": {
             "url": config.database.url,
+            "data_queries": config.database.data_queries,
         },
         "server": {
             "host": config.server.host,
