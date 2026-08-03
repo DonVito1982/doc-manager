@@ -379,6 +379,76 @@ class TestConvertHappyPath:
         assert any("--variable=header=My Header" in arg for arg in latex_extra)
         assert any("--variable=footer=My Footer" in arg for arg in latex_extra)
 
+    def test_pdf_saves_tex_file(self, tmp_path: Path) -> None:
+        """Verify the intermediate .tex file is saved to output/tex/."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/index.md")
+
+        def _create_pdf(*args, **kwargs):
+            cwd = kwargs.get("cwd", ".")
+            (Path(cwd) / "index.pdf").write_text("PDF", encoding="utf-8")
+            return MagicMock()
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}Test\end{document}",
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+                side_effect=_create_pdf,
+            ),
+        ):
+            convert(source, config, "# Test\n")
+
+        tex_file = tmp_path / "output/tex/index.tex"
+        assert tex_file.is_file()
+        tex_content = tex_file.read_text(encoding="utf-8")
+        assert r"\documentclass" in tex_content
+        assert r"\begin{document}" in tex_content
+
+    def test_pdf_saves_tex_file_nested(self, tmp_path: Path) -> None:
+        """Verify .tex file is saved with nested directory structure."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/guias/subseccion/deep.md")
+
+        def _create_pdf(*args, **kwargs):
+            cwd = kwargs.get("cwd", ".")
+            (Path(cwd) / "deep.pdf").write_text("PDF", encoding="utf-8")
+            return MagicMock()
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}Deep\end{document}",
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+                side_effect=_create_pdf,
+            ),
+        ):
+            convert(source, config, "# Deep\n")
+
+        tex_file = tmp_path / "output/tex/guias/subseccion/deep.tex"
+        assert tex_file.is_file()
+        assert r"\documentclass" in tex_file.read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # convert() — error cases
@@ -531,6 +601,34 @@ class TestConvertErrors:
         assert len(results) == 1
         assert results[0].success is True
 
+    def test_tex_not_saved_when_latexmk_missing(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """When latexmk is missing, .tex file is NOT saved (early return)."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/index.md")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value=None,  # latexmk not found
+            ),
+        ):
+            with caplog.at_level(logging.WARNING):
+                results = convert(source, config, "# Hello\n")
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "latexmk" in results[0].error.lower()
+
+        # The .tex file should NOT exist since we returned early
+        tex_file = tmp_path / "output/tex/index.tex"
+        assert not tex_file.is_file()
+
 
 # ---------------------------------------------------------------------------
 # _make_output_path
@@ -569,6 +667,18 @@ class TestMakeOutputPath:
         source = _make_source_file("content/index.md", fmt="md")
         result = _make_output_path(source, config, "pdf")
         assert result == Path("output/pdf/index.pdf")
+
+    def test_tex_format(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/index.md", fmt="md")
+        result = _make_output_path(source, config, "tex")
+        assert result == Path("output/tex/index.tex")
+
+    def test_tex_format_nested(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guia/instalacion.md.j2", fmt="md.j2")
+        result = _make_output_path(source, config, "tex")
+        assert result == Path("output/tex/guia/instalacion.tex")
 
     def test_custom_output_dir(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)

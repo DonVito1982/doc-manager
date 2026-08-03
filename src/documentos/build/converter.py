@@ -67,6 +67,7 @@ _FORMAT_TO_OUTPUT_EXT: dict[str, str] = {
     "html": ".html",
     "epub": ".epub",
     "pdf": ".pdf",
+    "tex": ".tex",
 }
 
 _FORMAT_TO_SUFFIX: dict[str, str] = {
@@ -338,6 +339,8 @@ def _convert_to_pdf(
     The conversion proceeds in two steps:
 
     1. Preprocessed Markdown is converted to LaTeX via Pandoc.
+       The intermediate ``.tex`` file is saved to ``output/tex/`` for
+       debugging and template inspection.
     2. The LaTeX file is compiled to PDF using ``latexmk -pdfxe``.
 
     If ``latexmk`` is not available a warning is emitted and the PDF is
@@ -402,6 +405,12 @@ def _convert_to_pdf(
         ) from exc
     finally:
         Path(math_header_path).unlink(missing_ok=True)
+
+    # Save the intermediate .tex file to output/tex/ for debugging
+    tex_output_path = _make_output_path(source, config, "tex")
+    tex_full_path = config.root / tex_output_path
+    tex_full_path.parent.mkdir(parents=True, exist_ok=True)
+    tex_full_path.write_text(latex_content, encoding="utf-8")
 
     # Step 2: Compile LaTeX to PDF via latexmk -----------------------------------
     with tempfile.TemporaryDirectory() as tmp_dir:
