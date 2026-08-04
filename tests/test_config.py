@@ -149,7 +149,7 @@ def test_load_valid_config(tmp_path: Path) -> None:
 def test_load_minimal_config(tmp_path: Path) -> None:
     """Load a minimal YAML with only project.title and verify defaults."""
     config_path = tmp_path / "config.yml"
-    _write_yaml(config_path, "project:\n  title: \"Solo título\"\n")
+    _write_yaml(config_path, 'project:\n  title: "Solo título"\n')
     _create_required_dirs(tmp_path)
 
     cfg = load_config(config_path)
@@ -222,7 +222,7 @@ def test_load_empty_formats(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     _write_yaml(
         config_path,
-        "project:\n  title: \"Test\"\noutput:\n  formats: []\n",
+        'project:\n  title: "Test"\noutput:\n  formats: []\n',
     )
     _create_required_dirs(tmp_path)
     with pytest.raises(ConfigError, match="cannot be empty"):
@@ -239,7 +239,7 @@ def test_load_invalid_format(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     _write_yaml(
         config_path,
-        "project:\n  title: \"Test\"\noutput:\n  formats:\n    - pdf\n    - docx\n",
+        'project:\n  title: "Test"\noutput:\n  formats:\n    - pdf\n    - docx\n',
     )
     _create_required_dirs(tmp_path)
     with pytest.raises(ConfigError, match="Unsupported output format"):
@@ -254,7 +254,7 @@ def test_load_invalid_format(tmp_path: Path) -> None:
 def test_load_missing_content_dir(tmp_path: Path) -> None:
     """Missing content/ directory must raise ConfigError."""
     config_path = tmp_path / "config.yml"
-    _write_yaml(config_path, "project:\n  title: \"Test\"\n")
+    _write_yaml(config_path, 'project:\n  title: "Test"\n')
     # Only create data/ and templates/ — not content/
     (tmp_path / "data").mkdir()
     (tmp_path / "templates").mkdir()
@@ -334,7 +334,7 @@ def test_load_config_missing_dirs_combined(
 ) -> None:
     """Missing data/ and/or templates/ raise ConfigError (content/ always required)."""
     config_path = tmp_path / "config.yml"
-    _write_yaml(config_path, "project:\n  title: \"Test\"\n")
+    _write_yaml(config_path, 'project:\n  title: "Test"\n')
     for dname in present_dirs:
         (tmp_path / dname).mkdir()
 
@@ -409,7 +409,7 @@ def test_load_config_formats_case_sensitive(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     _write_yaml(
         config_path,
-        "project:\n  title: \"Test\"\noutput:\n  formats:\n    - HTML\n",
+        'project:\n  title: "Test"\noutput:\n  formats:\n    - HTML\n',
     )
     _create_required_dirs(tmp_path)
     with pytest.raises(ConfigError, match="Unsupported output format"):
@@ -426,7 +426,7 @@ def test_load_config_output_formats_is_string(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     _write_yaml(
         config_path,
-        "project:\n  title: \"Test\"\noutput:\n  formats: html\n",
+        'project:\n  title: "Test"\noutput:\n  formats: html\n',
     )
     _create_required_dirs(tmp_path)
     cfg = load_config(config_path)
@@ -438,8 +438,20 @@ def test_load_config_data_files_is_string(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     _write_yaml(
         config_path,
-        "project:\n  title: \"Test\"\ndata:\n  files: single.csv\n",
+        'project:\n  title: "Test"\ndata:\n  files: single.csv\n',
     )
     _create_required_dirs(tmp_path)
     cfg = load_config(config_path)
     assert cfg.data.files == []
+
+
+def test_load_config_data_queries_is_string(tmp_path: Path) -> None:
+    """If database.data_queries is a string instead of a list, fall back to empty."""
+    config_path = tmp_path / "config.yml"
+    _write_yaml(
+        config_path,
+        "project:\n  title: Test\ndatabase:\n  data_queries: not_a_list\n",
+    )
+    _create_required_dirs(tmp_path)
+    cfg = load_config(config_path)
+    assert cfg.database.data_queries == []

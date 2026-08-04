@@ -100,9 +100,7 @@ def load_data_files(config: ProjectConfig) -> dict:
         try:
             result[key] = _parse_data_file(item_path, suffix)
         except Exception as exc:
-            logging.warning(
-                "Failed to parse data file '%s': %s", item_path, exc
-            )
+            logging.warning("Failed to parse data file '%s': %s", item_path, exc)
 
     return result
 
@@ -177,8 +175,7 @@ def execute_db_queries(config: ProjectConfig) -> dict:
     db_path_str = _extract_sqlite_path(url)
     if db_path_str is None:
         logging.warning(
-            "Database URL '%s' is not a recognised SQLite URL. "
-            "Skipping data queries.",
+            "Database URL '%s' is not a recognised SQLite URL. Skipping data queries.",
             url,
         )
         return {}
@@ -196,9 +193,7 @@ def execute_db_queries(config: ProjectConfig) -> dict:
         connection = sqlite3.connect(str(db_path))
         connection.row_factory = sqlite3.Row
     except sqlite3.Error as exc:
-        logging.warning(
-            "Failed to connect to SQLite database '%s': %s", db_path, exc
-        )
+        logging.warning("Failed to connect to SQLite database '%s': %s", db_path, exc)
         return {}
 
     try:
@@ -210,9 +205,7 @@ def execute_db_queries(config: ProjectConfig) -> dict:
                 rows = cursor.fetchall()
                 result[alias] = [dict(row) for row in rows]
             except sqlite3.Error as exc:
-                logging.warning(
-                    "Query '%s' failed: %s", alias, exc
-                )
+                logging.warning("Query '%s' failed: %s", alias, exc)
     finally:
         connection.close()
 

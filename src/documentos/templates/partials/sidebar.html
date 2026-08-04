@@ -1,0 +1,8 @@
+<aside class="sidebar">
+    <h2>Documentos</h2>
+    <ul>
+        {% for doc in documents %}
+        <li><a href="{{ doc.slug }}">{{ doc.title }}</a></li>
+        {% endfor %}
+    </ul>
+</aside>

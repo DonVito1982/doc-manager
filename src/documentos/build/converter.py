@@ -2,6 +2,10 @@
 
 Invokes Pandoc via ``pypandoc`` to transform preprocessed Markdown into
 the output formats declared in ``config.yml`` (``html``, ``epub``, ``pdf``).
+
+Uses Jinja2 templates for HTML layout and EPUB metadata.  LaTeX templates
+are Pandoc-native (``.tex``) and resolved from the user project or the
+packaged defaults.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pypandoc
+from jinja2 import ChoiceLoader, Environment, FileSystemLoader, PackageLoader
 
 from documentos.build.collector import SourceFile
 from documentos.config import ProjectConfig
@@ -84,7 +89,10 @@ _FORMAT_TO_SUFFIX: dict[str, str] = {
 
 
 def convert(
-    source: SourceFile, config: ProjectConfig, preprocessed: str
+    source: SourceFile,
+    config: ProjectConfig,
+    preprocessed: str,
+    all_documents: list[SourceFile] | None = None,
 ) -> list[ConvertedFile]:
     """Convert preprocessed Markdown to all configured output formats.
 
@@ -99,6 +107,8 @@ def convert(
         source: The source file being converted.
         config: The project configuration.
         preprocessed: Preprocessed Markdown content ready for Pandoc.
+        all_documents: Optional list of all collected source files, used
+            to populate the sidebar in the HTML template.
 
     Returns:
         A list of ``ConvertedFile`` instances, one per output format.
@@ -106,7 +116,6 @@ def convert(
     Raises:
         RuntimeError: If Pandoc is not installed.
     """
-    # Verify Pandoc is available -------------------------------------------------
     try:
         pypandoc.get_pandoc_version()
     except OSError as exc:
@@ -118,7 +127,7 @@ def convert(
     results: list[ConvertedFile] = []
 
     for fmt in config.output.formats:
-        result = _convert_single(source, config, preprocessed, fmt)
+        result = _convert_single(source, config, preprocessed, fmt, all_documents)
         results.append(result)
 
     return results
@@ -130,12 +139,16 @@ def convert(
 
 
 def _convert_single(
-    source: SourceFile, config: ProjectConfig, preprocessed: str, fmt: str
+    source: SourceFile,
+    config: ProjectConfig,
+    preprocessed: str,
+    fmt: str,
+    all_documents: list[SourceFile] | None = None,
 ) -> ConvertedFile:
     """Dispatch conversion to the appropriate format handler."""
     try:
         if fmt == "html":
-            return _convert_to_html(source, config, preprocessed)
+            return _convert_to_html(source, config, preprocessed, all_documents)
         elif fmt == "epub":
             return _convert_to_epub(source, config, preprocessed)
         elif fmt == "pdf":
@@ -180,11 +193,9 @@ def _make_output_path(source: SourceFile, config: ProjectConfig, fmt: str) -> Pa
         content/guia/instalacion.md.j2  →  output/html/guia/instalacion.html
     """
     relative = source.path
-    # Strip "content/" prefix if present
     if len(relative.parts) > 1 and relative.parts[0] == "content":
         relative = Path(*relative.parts[1:])
 
-    # Replace the source format suffix with the target output extension
     suffix = _FORMAT_TO_SUFFIX.get(source.format, Path(source.path).suffix)
     name_without_suffix = (
         relative.name[: -len(suffix)]
@@ -204,18 +215,106 @@ def _make_output_path(source: SourceFile, config: ProjectConfig, fmt: str) -> Pa
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers — Jinja2 environment
+# ---------------------------------------------------------------------------
+
+
+def _create_jinja_env(config: ProjectConfig) -> Environment:
+    """Create a Jinja2 environment with template resolution.
+
+    Templates are resolved in this order:
+    1. User's project ``templates/`` directory (if it exists).
+    2. Packaged templates inside ``documentos/templates/``.
+
+    Args:
+        config: The project configuration.
+
+    Returns:
+        A configured Jinja2 ``Environment``.
+    """
+    loaders: list = []
+
+    user_templates = config.root / config.templates.dir
+    if user_templates.is_dir():
+        loaders.append(FileSystemLoader(str(user_templates)))
+
+    loaders.append(PackageLoader("documentos", "templates"))
+
+    return Environment(loader=ChoiceLoader(loaders))
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers — template context
+# ---------------------------------------------------------------------------
+
+
+def _build_document_list(
+    documents: list[SourceFile], config: ProjectConfig
+) -> list[dict[str, str]]:
+    """Build a list of document dicts for template rendering.
+
+    Each dict contains ``title`` (from frontmatter or filename) and
+    ``slug`` (relative HTML output path).
+
+    Args:
+        documents: List of collected source files.
+        config: The project configuration.
+
+    Returns:
+        A list of dicts with ``title`` and ``slug`` keys.
+    """
+    result: list[dict[str, str]] = []
+    for doc in documents:
+        title = doc.frontmatter.get("title", doc.path.stem)
+        html_path = _make_output_path(doc, config, "html")
+        slug = str(html_path.relative_to(Path(config.output.dir) / "html"))
+        result.append({"title": str(title), "slug": slug})
+    return result
+
+
+def _build_html_context(
+    source: SourceFile,
+    config: ProjectConfig,
+    all_documents: list[SourceFile] | None,
+) -> dict:
+    """Build the Jinja2 context for the HTML template.
+
+    Args:
+        source: The source file being converted.
+        config: The project configuration.
+        all_documents: Optional list of all collected source files.
+
+    Returns:
+        A dict with keys ``project``, ``title``, ``documents``, ``assets``.
+    """
+    doc_list = _build_document_list(all_documents, config) if all_documents else []
+    return {
+        "project": {
+            "title": config.project.title,
+            "author": config.project.author,
+            "language": config.project.language,
+        },
+        "title": source.frontmatter.get("title", source.path.stem),
+        "documents": doc_list,
+        "assets": "assets",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers — HTML
 # ---------------------------------------------------------------------------
 
 
 def _convert_to_html(
-    source: SourceFile, config: ProjectConfig, preprocessed: str
+    source: SourceFile,
+    config: ProjectConfig,
+    preprocessed: str,
+    all_documents: list[SourceFile] | None = None,
 ) -> ConvertedFile:
     """Convert preprocessed Markdown to standalone HTML5 via Pandoc.
 
-    Uses ``pypandoc.convert_text()`` with ``--standalone`` and ``--toc``.
-    If a Pandoc HTML template exists in the project templates directory it
-    is passed via ``--template``.
+    Renders the ``base.html`` Jinja2 template (with ``$body$`` preserved
+    for Pandoc replacement) and passes it to Pandoc via ``--template``.
     """
     output_path = _make_output_path(source, config, "html")
     full_output = config.root / output_path
@@ -223,13 +322,24 @@ def _convert_to_html(
 
     extra_args = ["--standalone", "--toc"]
 
-    # Check for user-provided HTML template
-    templates_dir = config.root / config.templates.dir
-    html_template = templates_dir / "pandoc.html"
-    if html_template.is_file():
-        extra_args.append(f"--template={html_template}")
+    env = _create_jinja_env(config)
+    context = _build_html_context(source, config, all_documents)
 
     try:
+        rendered_template = env.get_template("base.html").render(**context)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to render HTML template for {source.path}: {exc}"
+        ) from exc
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".html", encoding="utf-8", delete=False
+    ) as tmp_template:
+        tmp_template.write(rendered_template)
+        template_path = tmp_template.name
+
+    try:
+        extra_args.append(f"--template={template_path}")
         html = pypandoc.convert_text(
             preprocessed,
             "html5",
@@ -238,6 +348,8 @@ def _convert_to_html(
         )
     except RuntimeError as exc:
         raise RuntimeError(f"Failed to convert {source.path} to HTML: {exc}") from exc
+    finally:
+        Path(template_path).unlink(missing_ok=True)
 
     full_output.write_text(html, encoding="utf-8")
 
@@ -259,8 +371,8 @@ def _convert_to_epub(
 ) -> ConvertedFile:
     """Convert preprocessed Markdown to EPUB via Pandoc.
 
-    Generates an ``epub-metadata.xml`` file from the project configuration
-    and passes it to Pandoc via ``--epub-metadata``.
+    Generates an ``epub-metadata.xml`` file from the Jinja2 template and
+    passes it to Pandoc via ``--epub-metadata``.
     """
     output_path = _make_output_path(source, config, "epub")
     full_output = config.root / output_path
@@ -268,7 +380,6 @@ def _convert_to_epub(
 
     metadata_path = _generate_epub_metadata(config)
     try:
-        # Write the preprocessed Markdown to a temp file for convert_file
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", encoding="utf-8", delete=False
         ) as tmp_md:
@@ -290,7 +401,6 @@ def _convert_to_epub(
         finally:
             tmp_md_path.unlink(missing_ok=True)
     finally:
-        # Clean up the temporary metadata file
         metadata_path.unlink(missing_ok=True)
 
     return ConvertedFile(
@@ -306,24 +416,40 @@ def _convert_to_epub(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_latex_template(
-    config: ProjectConfig, extra_args: list[str]
-) -> None:
-    """Resolve the LaTeX template path and append ``--template`` to *extra_args*.
+def _resolve_latex_template_path(config: ProjectConfig) -> Path | None:
+    """Resolve the LaTeX template path for Pandoc.
 
     Priority:
     1. ``config.pdf.template`` (if configured and the file exists).
-    2. ``templates/pandoc.latex`` (if it exists).
+    2. User's ``templates/latex-template.tex`` (if it exists).
+    3. Packaged ``templates/latex-template.tex``.
+
+    Args:
+        config: The project configuration.
+
+    Returns:
+        Absolute path to the template file, or ``None`` if no template
+        is found.
     """
     if config.pdf.template:
         candidate = config.root / config.pdf.template
         if candidate.is_file():
-            extra_args.append(f"--template={candidate}")
-            return
+            return candidate
 
-    default_template = config.root / config.templates.dir / "pandoc.latex"
-    if default_template.is_file():
-        extra_args.append(f"--template={default_template}")
+    user_template = config.root / config.templates.dir / "latex-template.tex"
+    if user_template.is_file():
+        return user_template
+
+    import importlib.resources
+
+    packaged = (
+        importlib.resources.files("documentos") / "templates" / "latex-template.tex"
+    )
+    if packaged.is_file():
+        with importlib.resources.as_file(packaged) as pkg_path:
+            return Path(str(pkg_path))
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +476,6 @@ def _convert_to_pdf(
     full_output = config.root / output_path
     full_output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check for latexmk availability
     if shutil.which("latexmk") is None:
         logging.warning(
             "latexmk not found in PATH. Skipping PDF generation for %s. "
@@ -366,32 +491,28 @@ def _convert_to_pdf(
             error="latexmk not installed — PDF generation skipped",
         )
 
-    # Step 1: Convert Markdown to LaTeX ------------------------------------------
     latex_extra_args: list[str] = ["--standalone"]
 
-    # Determine LaTeX template: config.pdf.template has highest priority,
-    # falling back to templates/pandoc.latex
-    _resolve_latex_template(config, latex_extra_args)
+    template_path = _resolve_latex_template_path(config)
+    if template_path is not None:
+        latex_extra_args.append(f"--template={template_path}")
 
-    # Math packages via --include-in-header (must be a file path, not raw text)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".tex", encoding="utf-8", delete=False
     ) as math_header_fh:
         math_header_fh.write(
-            "\\usepackage{amsmath}\n"
-            "\\usepackage{amssymb}\n"
-            "\\usepackage{unicode-math}\n"
+            "\\usepackage{amsmath}\n\\usepackage{amssymb}\n\\usepackage{unicode-math}\n"
         )
         math_header_path = math_header_fh.name
 
     try:
         latex_extra_args.append(f"--include-in-header={math_header_path}")
 
-        # Header/footer variables from config.pdf
         if config.pdf.header:
             latex_extra_args.append(f"--variable=header={config.pdf.header}")
         if config.pdf.footer:
             latex_extra_args.append(f"--variable=footer={config.pdf.footer}")
+        latex_extra_args.append(f"--variable=mathfont={config.pdf.math_font}")
 
         latex_content = pypandoc.convert_text(
             preprocessed,
@@ -400,19 +521,15 @@ def _convert_to_pdf(
             extra_args=latex_extra_args,
         )
     except RuntimeError as exc:
-        raise RuntimeError(
-            f"Failed to convert {source.path} to LaTeX: {exc}"
-        ) from exc
+        raise RuntimeError(f"Failed to convert {source.path} to LaTeX: {exc}") from exc
     finally:
         Path(math_header_path).unlink(missing_ok=True)
 
-    # Save the intermediate .tex file to output/tex/ for debugging
     tex_output_path = _make_output_path(source, config, "tex")
     tex_full_path = config.root / tex_output_path
     tex_full_path.parent.mkdir(parents=True, exist_ok=True)
     tex_full_path.write_text(latex_content, encoding="utf-8")
 
-    # Step 2: Compile LaTeX to PDF via latexmk -----------------------------------
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_dir_path = Path(tmp_dir)
         tex_file = tmp_dir_path / f"{full_output.stem}.tex"
@@ -439,16 +556,13 @@ def _convert_to_pdf(
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"latexmk timed out for {source.path}") from exc
 
-        # Move the generated PDF to the output location
         pdf_file = tmp_dir_path / f"{full_output.stem}.pdf"
         if not pdf_file.is_file():
             raise RuntimeError(f"latexmk did not produce a PDF for {source.path}")
         try:
             shutil.move(str(pdf_file), str(full_output))
         except OSError as exc:
-            raise RuntimeError(
-                f"Failed to move PDF for {source.path}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to move PDF for {source.path}: {exc}") from exc
 
     return ConvertedFile(
         source=source.path,
@@ -464,7 +578,7 @@ def _convert_to_pdf(
 
 
 def _generate_epub_metadata(config: ProjectConfig) -> Path:
-    """Generate an ``epub-metadata.xml`` file from project configuration.
+    """Generate an ``epub-metadata.xml`` file from the Jinja2 template.
 
     The file is written to a temporary location and must be cleaned up by
     the caller.
@@ -475,20 +589,25 @@ def _generate_epub_metadata(config: ProjectConfig) -> Path:
     Returns:
         Path to the generated temporary metadata XML file.
     """
-    metadata_xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
-        f"  <dc:title>{_escape_xml(config.project.title)}</dc:title>\n"
-        f"  <dc:creator>{_escape_xml(config.project.author)}</dc:creator>\n"
-        f"  <dc:language>{_escape_xml(config.project.language)}</dc:language>\n"
-        "</metadata>\n"
-    )
+    env = _create_jinja_env(config)
+    context = {
+        "project": {
+            "title": config.project.title,
+            "author": config.project.author,
+            "language": config.project.language,
+        },
+    }
+
+    try:
+        rendered = env.get_template("epub-metadata.xml").render(**context)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to render EPUB metadata template: {exc}") from exc
 
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".xml", encoding="utf-8", delete=False
     )
     try:
-        tmp.write(metadata_xml)
+        tmp.write(rendered)
         return Path(tmp.name)
     finally:
         tmp.close()

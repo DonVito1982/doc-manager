@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>{{ project.title | e }}</dc:title>
+    <dc:creator>{{ project.author | e }}</dc:creator>
+    <dc:language>{{ project.language | e }}</dc:language>
+</metadata>

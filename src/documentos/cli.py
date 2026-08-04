@@ -45,8 +45,7 @@ def init(ruta: str):
 
     if config_path.exists():
         if not click.confirm(
-            f"La ruta '{project_path}' ya contiene un proyecto. "
-            "¿Desea sobrescribirlo?",
+            f"La ruta '{project_path}' ya contiene un proyecto. ¿Desea sobrescribirlo?",
             default=False,
         ):
             raise click.Abort()
@@ -93,9 +92,7 @@ def build():
     else:
         click.echo("  (no se encontraron archivos fuente en content/)")
 
-    click.echo(
-        "\nBuild pipeline no implementado — se listan los archivos encontrados"
-    )
+    click.echo("\nBuild pipeline no implementado — se listan los archivos encontrados")
 
 
 @main.command()

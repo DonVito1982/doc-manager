@@ -35,6 +35,7 @@ DEFAULT_OUTPUT_DIR = "output"
 
 DEFAULT_PDF_HEADER = ""
 DEFAULT_PDF_FOOTER = ""
+DEFAULT_PDF_MATH_FONT = "Latin Modern Math"
 
 DEFAULT_MARKUP = "pandoc-markdown"
 
@@ -81,6 +82,7 @@ class PdfSection:
     header: str = DEFAULT_PDF_HEADER
     footer: str = DEFAULT_PDF_FOOTER
     template: str | None = None
+    math_font: str = DEFAULT_PDF_MATH_FONT
 
 
 @dataclass
@@ -182,9 +184,7 @@ def load_config(path: Path) -> ProjectConfig:
         raw_text = path.read_text(encoding="utf-8")
         raw_data: dict = yaml.safe_load(raw_text) or {}
     except yaml.YAMLError as exc:
-        raise ConfigError(
-            f"Failed to parse YAML in {path}: {exc}"
-        ) from exc
+        raise ConfigError(f"Failed to parse YAML in {path}: {exc}") from exc
 
     if not isinstance(raw_data, dict):
         raise ConfigError(
@@ -279,6 +279,7 @@ def _parse_pdf(raw: dict | None) -> PdfSection:
         header=str(raw.get("header", DEFAULT_PDF_HEADER)),
         footer=str(raw.get("footer", DEFAULT_PDF_FOOTER)),
         template=str(template) if template is not None else None,
+        math_font=str(raw.get("math_font", DEFAULT_PDF_MATH_FONT)),
     )
 
 
@@ -377,8 +378,7 @@ def _validate_directories(project_root: Path) -> None:
             missing.append(dirname)
     if missing:
         raise ConfigError(
-            f"Missing required directorie(s) in {project_root}: "
-            f"{', '.join(missing)}"
+            f"Missing required directorie(s) in {project_root}: {', '.join(missing)}"
         )
 
 
@@ -408,6 +408,7 @@ def _config_to_dict(config: ProjectConfig) -> dict:
             "header": config.pdf.header,
             "footer": config.pdf.footer,
             "template": config.pdf.template,
+            "math_font": config.pdf.math_font,
         },
         "markup": {
             "default": config.markup.default,
