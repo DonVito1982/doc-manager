@@ -301,6 +301,32 @@ def _build_html_context(
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers — math filter resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_math_filter_path() -> str:
+    """Resolve the absolute path to the Pandoc math filter script.
+
+    Returns:
+        Absolute path to ``math_filter.py`` packaged inside
+        ``documentos/build/``.
+
+    Raises:
+        RuntimeError: If the filter script cannot be located.
+    """
+    import importlib.resources
+
+    pkg = importlib.resources.files("documentos") / "build" / "math_filter.py"
+    if not pkg.is_file():
+        raise RuntimeError(
+            "Packaged math filter not found at documentos/build/math_filter.py"
+        )
+    with importlib.resources.as_file(pkg) as filter_path:
+        return str(filter_path)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers — HTML
 # ---------------------------------------------------------------------------
 
@@ -320,7 +346,8 @@ def _convert_to_html(
     full_output = config.root / output_path
     full_output.parent.mkdir(parents=True, exist_ok=True)
 
-    extra_args = ["--standalone", "--toc"]
+    math_filter_path = _resolve_math_filter_path()
+    extra_args = ["--standalone", "--toc", f"--filter={math_filter_path}"]
 
     env = _create_jinja_env(config)
     context = _build_html_context(source, config, all_documents)
@@ -392,7 +419,11 @@ def _convert_to_epub(
                 to="epub",
                 format="markdown",
                 outputfile=str(full_output),
-                extra_args=["--toc", f"--epub-metadata={metadata_path}"],
+                extra_args=[
+                    "--toc",
+                    f"--epub-metadata={metadata_path}",
+                    f"--filter={_resolve_math_filter_path()}",
+                ],
             )
         except RuntimeError as exc:
             raise RuntimeError(
@@ -491,7 +522,11 @@ def _convert_to_pdf(
             error="latexmk not installed — PDF generation skipped",
         )
 
-    latex_extra_args: list[str] = ["--standalone"]
+    math_filter_path = _resolve_math_filter_path()
+    latex_extra_args: list[str] = [
+        "--standalone",
+        f"--filter={math_filter_path}",
+    ]
 
     template_path = _resolve_latex_template_path(config)
     if template_path is not None:

@@ -1370,8 +1370,8 @@ class TestBaseHtmlTemplate:
         assert '<a href="index.html">Home</a>' in rendered
         assert '<a href="guia/intro.html">Guide</a>' in rendered
 
-    def test_mathjax_config_inline(self, tmp_path: Path) -> None:
-        """MathJax configuration is present in the rendered HTML."""
+    def test_mathjax_config_external(self, tmp_path: Path) -> None:
+        """MathJax configuration is loaded from an external file."""
         config = _make_config(tmp_path)
         env = _create_jinja_env(config)
         rendered = env.get_template("base.html").render(
@@ -1380,9 +1380,8 @@ class TestBaseHtmlTemplate:
             documents=[],
             assets="assets",
         )
-        assert "inlineMath" in rendered
-        assert "displayMath" in rendered
-        assert "processEscapes" in rendered
+        assert 'src="assets/js/mathjax-config.js"' in rendered
+        assert "cdn.jsdelivr.net/npm/mathjax@3" in rendered
 
 
 class TestEpubMetadataTemplate:
