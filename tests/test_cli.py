@@ -42,9 +42,7 @@ class TestInit:
         for dirname in ("content", "data", "templates", "output"):
             assert (target / dirname).is_dir()
 
-    def test_creates_structure_in_current_dir(
-        self, runner: CliRunner, tmp_path: Path
-    ):
+    def test_creates_structure_in_current_dir(self, runner: CliRunner, tmp_path: Path):
         cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
@@ -96,18 +94,16 @@ class TestInit:
     ):
         target = tmp_path / "mi-proyecto"
         target.mkdir()
-        (target / "config.yml").write_text("project:\n  title: \"Existente\"\n")
+        (target / "config.yml").write_text('project:\n  title: "Existente"\n')
 
         result = runner.invoke(main, ["init", str(target)], input="n\n")
         assert result.exit_code != 0
         assert "ya contiene un proyecto" in result.output.lower()
 
-    def test_existing_path_overwrite_confirmed(
-        self, runner: CliRunner, tmp_path: Path
-    ):
+    def test_existing_path_overwrite_confirmed(self, runner: CliRunner, tmp_path: Path):
         target = tmp_path / "mi-proyecto"
         target.mkdir()
-        (target / "config.yml").write_text("project:\n  title: \"Existente\"\n")
+        (target / "config.yml").write_text('project:\n  title: "Existente"\n')
 
         result = runner.invoke(main, ["init", str(target)], input="y\n")
         assert result.exit_code == 0
@@ -160,9 +156,7 @@ class TestBuild:
         finally:
             os.chdir(cwd)
 
-    def test_build_without_config_shows_error(
-        self, runner: CliRunner, tmp_path: Path
-    ):
+    def test_build_without_config_shows_error(self, runner: CliRunner, tmp_path: Path):
         empty = tmp_path / "empty"
         empty.mkdir()
         cwd = os.getcwd()
@@ -203,7 +197,7 @@ class TestBuild:
         proj.mkdir()
         # Write a valid config.yml but do NOT create content/data/templates dirs
         config_path = proj / "config.yml"
-        config_path.write_text("project:\n  title: \"Un proyecto\"\n", encoding="utf-8")
+        config_path.write_text('project:\n  title: "Un proyecto"\n', encoding="utf-8")
 
         cwd = os.getcwd()
         try:

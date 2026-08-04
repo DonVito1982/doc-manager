@@ -245,12 +245,14 @@ class TestCollect:
 
     def test_collects_ipynb(self, project_config: ProjectConfig, tmp_path: Path):
         content = tmp_path / "content"
-        nb = json.dumps({
-            "cells": [{"cell_type": "markdown", "source": ["# Notebook Title"]}],
-            "metadata": {"author": "Carlos"},
-            "nbformat": 4,
-            "nbformat_minor": 2,
-        })
+        nb = json.dumps(
+            {
+                "cells": [{"cell_type": "markdown", "source": ["# Notebook Title"]}],
+                "metadata": {"author": "Carlos"},
+                "nbformat": 4,
+                "nbformat_minor": 2,
+            }
+        )
         (content / "notebook.ipynb").write_text(nb)
         results = collect(project_config)
         assert len(results) == 1
@@ -268,9 +270,7 @@ class TestCollect:
         assert results[0].format == "adoc"
         assert results[0].frontmatter == {}
 
-    def test_ignores_hidden_files(
-        self, project_config: ProjectConfig, tmp_path: Path
-    ):
+    def test_ignores_hidden_files(self, project_config: ProjectConfig, tmp_path: Path):
         content = tmp_path / "content"
         (content / ".hidden.md").write_text("---\ntitle: Hidden\n---\n# nope")
         (content / "_draft.md").write_text("# Draft")
@@ -305,9 +305,7 @@ class TestCollect:
         assert len(results) == 1
         assert results[0].format == "md"
 
-    def test_sorted_alphabetically(
-        self, project_config: ProjectConfig, tmp_path: Path
-    ):
+    def test_sorted_alphabetically(self, project_config: ProjectConfig, tmp_path: Path):
         content = tmp_path / "content"
         (content / "zebra.md").write_text("# Z")
         (content / "alpha.md").write_text("# A")
@@ -321,12 +319,14 @@ class TestCollect:
         (content / "a.md").write_text("---\ntitle: MD\n---\n# a")
         (content / "b.adoc").write_text("= AsciiDoc")
         (content / "c.ipynb").write_text(
-            json.dumps({
-                "cells": [{"cell_type": "markdown", "source": ["# Notebook"]}],
-                "metadata": {},
-                "nbformat": 4,
-                "nbformat_minor": 2,
-            })
+            json.dumps(
+                {
+                    "cells": [{"cell_type": "markdown", "source": ["# Notebook"]}],
+                    "metadata": {},
+                    "nbformat": 4,
+                    "nbformat_minor": 2,
+                }
+            )
         )
         (content / "d.md.j2").write_text("---\ntitle: Template\n---\n{{ x }}")
         results = collect(project_config)

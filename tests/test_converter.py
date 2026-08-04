@@ -12,9 +12,13 @@ from documentos.build.collector import SourceFile
 from documentos.build.converter import (
     BuildResult,
     ConvertedFile,
+    _build_document_list,
+    _build_html_context,
+    _create_jinja_env,
     _escape_xml,
     _generate_epub_metadata,
     _make_output_path,
+    _resolve_latex_template_path,
     convert,
 )
 from documentos.config import ProjectConfig
@@ -315,15 +319,13 @@ class TestConvertHappyPath:
         assert any("custom.latex" in arg for arg in latex_extra)
 
     def test_with_latex_template_default(self, tmp_path: Path) -> None:
-        """Verify pandoc.latex from templates dir is used when no custom template."""
+        """Verify latex-template.tex from templates dir is used as default."""
         config = _make_config(tmp_path, formats=["pdf"])
         source = _make_source_file("content/index.md")
 
         templates_dir = tmp_path / config.templates.dir
         templates_dir.mkdir(parents=True)
-        (templates_dir / "pandoc.latex").write_text("% default")
-
-        # Do NOT set config.pdf.template
+        (templates_dir / "latex-template.tex").write_text("% default")
 
         with (
             patch(
@@ -346,7 +348,7 @@ class TestConvertHappyPath:
 
         latex_extra = mock_convert.call_args[1]["extra_args"]
         assert any("--template=" in arg for arg in latex_extra)
-        assert any("pandoc.latex" in arg for arg in latex_extra)
+        assert any("latex-template.tex" in arg for arg in latex_extra)
 
     def test_with_pdf_header_and_footer(self, tmp_path: Path) -> None:
         """Verify header/footer variables are passed to Pandoc."""
@@ -601,9 +603,7 @@ class TestConvertErrors:
         assert len(results) == 1
         assert results[0].success is True
 
-    def test_tex_not_saved_when_latexmk_missing(
-        self, tmp_path: Path, caplog
-    ) -> None:
+    def test_tex_not_saved_when_latexmk_missing(self, tmp_path: Path, caplog) -> None:
         """When latexmk is missing, .tex file is NOT saved (early return)."""
         config = _make_config(tmp_path, formats=["pdf"])
         source = _make_source_file("content/index.md")
@@ -724,7 +724,7 @@ class TestEpubMetadata:
         try:
             content = metadata_path.read_text(encoding="utf-8")
             assert "<dc:title>A &amp; B &lt; C</dc:title>" in content
-            assert "<dc:creator>Author &quot;X&quot;</dc:creator>" in content
+            assert "<dc:creator>Author &#34;X&#34;</dc:creator>" in content
         finally:
             metadata_path.unlink(missing_ok=True)
 
@@ -1050,8 +1050,8 @@ class TestConvertIntegration:
         assert "amssymb" in written_content[0]
         assert "unicode-math" in written_content[0]
 
-    def test_no_html_template_no_template_flag(self, tmp_path: Path) -> None:
-        """When no pandoc.html exists, --template is not passed for HTML."""
+    def test_html_template_flag_always_present(self, tmp_path: Path) -> None:
+        """The base.html Jinja2 template is always rendered and passed to Pandoc."""
         config = _make_config(tmp_path, formats=["html"])
         source = _make_source_file("content/index.md")
 
@@ -1068,7 +1068,7 @@ class TestConvertIntegration:
             convert(source, config, "# OK\n")
 
         extra_args = mock_convert.call_args[1]["extra_args"]
-        assert not any("--template=" in a for a in extra_args)
+        assert any("--template=" in a for a in extra_args)
 
 
 # ---------------------------------------------------------------------------
@@ -1152,3 +1152,499 @@ class TestEdgeCases:
         assert len(results) == 1
         assert results[0].success is False
         assert "did not produce a PDF" in results[0].error
+
+
+# ---------------------------------------------------------------------------
+# Template rendering tests (TK-008)
+# ---------------------------------------------------------------------------
+
+
+class TestJinjaEnv:
+    """Tests for the Jinja2 environment creation."""
+
+    def test_creates_env_with_packaged_templates(self, tmp_path: Path) -> None:
+        """The environment can load the packaged base.html template."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        template = env.get_template("base.html")
+        assert template is not None
+
+    def test_creates_env_with_user_templates(self, tmp_path: Path) -> None:
+        """User templates directory is included in the loader."""
+        config = _make_config(tmp_path)
+        user_dir = tmp_path / config.templates.dir
+        user_dir.mkdir(parents=True)
+        (user_dir / "custom.html").write_text("<html>{{ title }}</html>")
+
+        env = _create_jinja_env(config)
+        template = env.get_template("custom.html")
+        rendered = template.render(title="Test")
+        assert "<html>Test</html>" in rendered
+
+    def test_user_template_overrides_packaged(self, tmp_path: Path) -> None:
+        """A user-provided base.html overrides the packaged one."""
+        config = _make_config(tmp_path)
+        user_dir = tmp_path / config.templates.dir
+        user_dir.mkdir(parents=True)
+        (user_dir / "base.html").write_text("<html><body>CUSTOM</body></html>")
+
+        env = _create_jinja_env(config)
+        template = env.get_template("base.html")
+        rendered = template.render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Doc",
+            documents=[],
+            assets="assets",
+        )
+        assert "CUSTOM" in rendered
+
+    def test_env_loads_partials(self, tmp_path: Path) -> None:
+        """The environment can resolve partials via {% include %}."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        template = env.get_template("base.html")
+        rendered = template.render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Doc",
+            documents=[],
+            assets="assets",
+        )
+        assert "<nav" in rendered
+        assert "sidebar" in rendered
+
+
+class TestBuildDocumentList:
+    """Tests for the _build_document_list helper."""
+
+    def test_empty_list(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        result = _build_document_list([], config)
+        assert result == []
+
+    def test_single_document(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        sf = SourceFile(
+            path=Path("content/index.md"),
+            format="md",
+            frontmatter={"title": "Home"},
+        )
+        result = _build_document_list([sf], config)
+        assert len(result) == 1
+        assert result[0]["title"] == "Home"
+        assert result[0]["slug"] == "index.html"
+
+    def test_falls_back_to_stem(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        sf = SourceFile(path=Path("content/guia/intro.md"), format="md")
+        result = _build_document_list([sf], config)
+        assert result[0]["title"] == "intro"
+
+    def test_nested_documents(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        sf = SourceFile(
+            path=Path("content/a/b/doc.md"),
+            format="md",
+            frontmatter={"title": "Deep Doc"},
+        )
+        result = _build_document_list([sf], config)
+        assert result[0]["slug"] == "a/b/doc.html"
+
+    def test_multiple_documents(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/guia/intro.md"),
+                format="md",
+                frontmatter={"title": "Intro"},
+            ),
+        ]
+        result = _build_document_list(docs, config)
+        assert len(result) == 2
+        assert result[0]["title"] == "Home"
+        assert result[1]["title"] == "Intro"
+
+
+class TestBuildHtmlContext:
+    """Tests for the _build_html_context helper."""
+
+    def test_context_without_documents(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        config.project.title = "My Project"
+        config.project.author = "Author"
+        config.project.language = "en"
+
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Welcome"}
+
+        ctx = _build_html_context(source, config, None)
+        assert ctx["project"]["title"] == "My Project"
+        assert ctx["project"]["author"] == "Author"
+        assert ctx["project"]["language"] == "en"
+        assert ctx["title"] == "Welcome"
+        assert ctx["documents"] == []
+        assert ctx["assets"] == "assets"
+
+    def test_context_with_documents(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Home"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/about.md"),
+                format="md",
+                frontmatter={"title": "About"},
+            ),
+        ]
+
+        ctx = _build_html_context(source, config, all_docs)
+        assert len(ctx["documents"]) == 2
+        assert ctx["documents"][0]["title"] == "Home"
+        assert ctx["documents"][1]["title"] == "About"
+
+    def test_context_title_fallback(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/readme.md")
+        ctx = _build_html_context(source, config, None)
+        assert ctx["title"] == "readme"
+
+
+class TestBaseHtmlTemplate:
+    """Tests for the base.html Jinja2 template rendering."""
+
+    def test_renders_html5_structure(self, tmp_path: Path) -> None:
+        """The rendered template is valid HTML5 with expected elements."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("base.html").render(
+            project={"title": "Test Project", "author": "Tester", "language": "es"},
+            title="My Document",
+            documents=[],
+            assets="assets",
+        )
+        assert "<!DOCTYPE html>" in rendered
+        assert '<html lang="es">' in rendered
+        assert "<title>My Document — Test Project</title>" in rendered
+        assert '<link rel="stylesheet" href="assets/css/style.css">' in rendered
+        assert "cdn.jsdelivr.net/npm/mathjax@3" in rendered
+        assert "<header>" in rendered
+        assert "<main>" in rendered
+        assert "<footer>" in rendered
+        assert "Tester" in rendered
+
+    def test_body_placeholder_preserved(self, tmp_path: Path) -> None:
+        """The $body$ placeholder is preserved for Pandoc replacement."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("base.html").render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Doc",
+            documents=[],
+            assets="assets",
+        )
+        assert "$body$" in rendered
+
+    def test_sidebar_with_documents(self, tmp_path: Path) -> None:
+        """Documents appear as links in the sidebar."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("base.html").render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Doc",
+            documents=[
+                {"title": "Home", "slug": "index.html"},
+                {"title": "Guide", "slug": "guia/intro.html"},
+            ],
+            assets="assets",
+        )
+        assert '<a href="index.html">Home</a>' in rendered
+        assert '<a href="guia/intro.html">Guide</a>' in rendered
+
+    def test_mathjax_config_inline(self, tmp_path: Path) -> None:
+        """MathJax configuration is present in the rendered HTML."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("base.html").render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Doc",
+            documents=[],
+            assets="assets",
+        )
+        assert "inlineMath" in rendered
+        assert "displayMath" in rendered
+        assert "processEscapes" in rendered
+
+
+class TestEpubMetadataTemplate:
+    """Tests for the epub-metadata.xml Jinja2 template."""
+
+    def test_renders_valid_xml(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        config.project.title = "My Book"
+        config.project.author = "Author Name"
+        config.project.language = "en"
+
+        path = _generate_epub_metadata(config)
+        try:
+            content = path.read_text(encoding="utf-8")
+            assert '<?xml version="1.0"' in content
+            assert "<dc:title>My Book</dc:title>" in content
+            assert "<dc:creator>Author Name</dc:creator>" in content
+            assert "<dc:language>en</dc:language>" in content
+            assert 'xmlns:dc="http://purl.org/dc/elements/1.1/"' in content
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_user_template_overrides_packaged(self, tmp_path: Path) -> None:
+        """A user-provided epub-metadata.xml overrides the packaged one."""
+        config = _make_config(tmp_path)
+        config.project.title = "Original"
+        config.project.author = "Original Author"
+        config.project.language = "es"
+
+        user_dir = tmp_path / config.templates.dir
+        user_dir.mkdir(parents=True)
+        (user_dir / "epub-metadata.xml").write_text(
+            '<?xml version="1.0"?>'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>CUSTOM {{ project.title | e }}</dc:title>"
+            "</metadata>"
+        )
+
+        path = _generate_epub_metadata(config)
+        try:
+            content = path.read_text(encoding="utf-8")
+            assert "<dc:title>CUSTOM Original</dc:title>" in content
+        finally:
+            path.unlink(missing_ok=True)
+
+
+class TestLatexTemplateResolution:
+    """Tests for the _resolve_latex_template_path function."""
+
+    def test_config_pdf_template_has_priority(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        custom = tmp_path / "my-template.tex"
+        custom.write_text("% custom")
+        config.pdf.template = "my-template.tex"
+
+        result = _resolve_latex_template_path(config)
+        assert result is not None
+        assert result.name == "my-template.tex"
+
+    def test_config_pdf_template_missing_file(self, tmp_path: Path) -> None:
+        """When config.pdf.template points to missing file, falls back to packaged."""
+        config = _make_config(tmp_path)
+        config.pdf.template = "nonexistent.tex"
+
+        result = _resolve_latex_template_path(config)
+        assert result is not None
+        assert "latex-template.tex" in str(result)
+
+    def test_user_templates_dir_has_priority_over_packaged(
+        self, tmp_path: Path
+    ) -> None:
+        config = _make_config(tmp_path)
+        user_dir = tmp_path / config.templates.dir
+        user_dir.mkdir(parents=True)
+        (user_dir / "latex-template.tex").write_text("% user template")
+
+        result = _resolve_latex_template_path(config)
+        assert result is not None
+        assert "latex-template.tex" in str(result)
+
+    def test_falls_back_to_packaged(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        result = _resolve_latex_template_path(config)
+        assert result is not None
+        assert "latex-template.tex" in str(result)
+
+    def test_config_pdf_template_none(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        config.pdf.template = None
+        result = _resolve_latex_template_path(config)
+        assert result is not None
+
+
+class TestHtmlConversionWithTemplates:
+    """Integration tests for HTML conversion with Jinja2 templates."""
+
+    def test_html_conversion_uses_rendered_template(self, tmp_path: Path) -> None:
+        """The HTML conversion passes a rendered template to Pandoc."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Welcome"}
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value="<html>OK</html>",
+            ) as mock_convert,
+        ):
+            convert(source, config, "# Hello\n")
+
+        extra_args = mock_convert.call_args[1]["extra_args"]
+        template_arg = next(a for a in extra_args if a.startswith("--template="))
+        template_path = Path(template_arg.split("=", 1)[1])
+
+        assert not template_path.exists()
+
+    def test_html_conversion_with_all_documents(self, tmp_path: Path) -> None:
+        """Sidebar is populated when all_documents is provided."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Home"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/about.md"),
+                format="md",
+                frontmatter={"title": "About Us"},
+            ),
+        ]
+
+        captured_template: list[str] = []
+
+        def _capture_template(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture_template,
+            ),
+        ):
+            convert(source, config, "# Hello\n", all_documents=all_docs)
+
+        assert len(captured_template) == 1
+        assert "About Us" in captured_template[0]
+        assert "Home" in captured_template[0]
+
+    def test_user_base_html_overrides_packaged(self, tmp_path: Path) -> None:
+        """A user-provided base.html is used instead of the packaged one."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/index.md")
+
+        user_dir = tmp_path / config.templates.dir
+        user_dir.mkdir(parents=True)
+        (user_dir / "base.html").write_text(
+            "<html><body>CUSTOM SITE {% raw %}$body${% endraw %}</body></html>"
+        )
+
+        captured_template: list[str] = []
+
+        def _capture_template(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture_template,
+            ),
+        ):
+            convert(source, config, "# Hello\n")
+
+        assert len(captured_template) == 1
+        assert "CUSTOM SITE" in captured_template[0]
+        assert "$body$" in captured_template[0]
+
+
+class TestPdfMathFont:
+    """Tests for the math_font config field and its usage in PDF conversion."""
+
+    def test_math_font_default(self) -> None:
+        """PdfSection.math_font defaults to 'Latin Modern Math'."""
+        from documentos.config import PdfSection
+
+        section = PdfSection()
+        assert section.math_font == "Latin Modern Math"
+
+    def test_math_font_from_yaml(self, tmp_path: Path) -> None:
+        """math_font is parsed from config.yml."""
+        from documentos.config import load_config
+
+        config_path = tmp_path / "config.yml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "content").mkdir()
+        (tmp_path / "data").mkdir()
+        (tmp_path / "templates").mkdir()
+
+        config_path.write_text(
+            "project:\n  title: Test\npdf:\n  math_font: STIX Two Math\n",
+            encoding="utf-8",
+        )
+
+        cfg = load_config(config_path)
+        assert cfg.pdf.math_font == "STIX Two Math"
+
+    def test_math_font_passed_to_pandoc(self, tmp_path: Path) -> None:
+        """The math_font value is passed as --variable=mathfont to Pandoc."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        config.pdf.math_font = "XITS Math"
+        source = _make_source_file("content/doc.md")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ) as mock_convert,
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+            ),
+        ):
+            convert(source, config, "# Test\n")
+
+        extra_args = mock_convert.call_args[1]["extra_args"]
+        assert any("--variable=mathfont=XITS Math" in a for a in extra_args)
+
+    def test_math_font_in_init_config(self, tmp_path: Path) -> None:
+        """init_config writes math_font with default value."""
+        from documentos.config import init_config
+
+        config_path = tmp_path / "config.yml"
+        init_config(config_path)
+
+        content = config_path.read_text(encoding="utf-8")
+        assert "math_font" in content
+        assert "Latin Modern Math" in content

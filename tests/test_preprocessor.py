@@ -27,9 +27,7 @@ from documentos.config import ProjectConfig
 # ---------------------------------------------------------------------------
 
 
-def _make_project_config(
-    tmp_path: Path, data_dir_name: str = "data"
-) -> ProjectConfig:
+def _make_project_config(tmp_path: Path, data_dir_name: str = "data") -> ProjectConfig:
     """Create a minimal ProjectConfig rooted at *tmp_path* with a data dir."""
     config = ProjectConfig(root=tmp_path)
     config.data.dir = data_dir_name
@@ -217,9 +215,7 @@ class TestLoadDataFiles:
         (data_dir / "metadata.json").write_text(
             json.dumps({"version": "1.0"}), encoding="utf-8"
         )
-        (data_dir / "settings.yml").write_text(
-            "theme: dark\n", encoding="utf-8"
-        )
+        (data_dir / "settings.yml").write_text("theme: dark\n", encoding="utf-8")
 
         config = _make_project_config(tmp_path)
         result = load_data_files(config)
@@ -300,7 +296,7 @@ class TestLoadDataFiles:
             '<?xml version="1.0"?><root>'
             '<item id="1">A</item>'
             '<item id="2">B</item>'
-            '</root>',
+            "</root>",
             encoding="utf-8",
         )
 
@@ -367,22 +363,16 @@ class TestPreprocess:
             encoding="utf-8",
         )
         source = _make_source_file(file, fmt="md.j2")
-        context = DataContext(
-            data={"items": [{"name": "A"}, {"name": "B"}]}
-        )
+        context = DataContext(data={"items": [{"name": "A"}, {"name": "B"}]})
 
         result = preprocess(source, context)
         assert result == "- A\n- B\n"
 
     def test_render_with_db(self, tmp_path: Path) -> None:
         file = tmp_path / "template.md.j2"
-        file.write_text(
-            "{{ db.autores[0].nombre }}\n", encoding="utf-8"
-        )
+        file.write_text("{{ db.autores[0].nombre }}\n", encoding="utf-8")
         source = _make_source_file(file, fmt="md.j2")
-        context = DataContext(
-            db={"autores": [{"nombre": "Carlos"}]}
-        )
+        context = DataContext(db={"autores": [{"nombre": "Carlos"}]})
 
         result = preprocess(source, context)
         assert result == "Carlos\n"
@@ -394,9 +384,7 @@ class TestPreprocess:
             encoding="utf-8",
         )
         source = _make_source_file(file, fmt="md.j2")
-        context = DataContext(
-            project={"title": "Manual", "author": "Equipo"}
-        )
+        context = DataContext(project={"title": "Manual", "author": "Equipo"})
 
         result = preprocess(source, context)
         assert result == "Title: Manual\nAuthor: Equipo\n"
@@ -414,9 +402,7 @@ class TestPreprocess:
 
     # --- Jinja2 errors --------------------------------------------------------
 
-    def test_undefined_variable_raises_undefined_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_undefined_variable_raises_undefined_error(self, tmp_path: Path) -> None:
         file = tmp_path / "template.md.j2"
         file.write_text("{{ nonexistent }}\n", encoding="utf-8")
         source = _make_source_file(file, fmt="md.j2")
@@ -425,9 +411,7 @@ class TestPreprocess:
         with pytest.raises(UndefinedError):
             preprocess(source, context)
 
-    def test_syntax_error_raises_template_syntax_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_syntax_error_raises_template_syntax_error(self, tmp_path: Path) -> None:
         file = tmp_path / "template.md.j2"
         file.write_text("{% for %}\n", encoding="utf-8")
         source = _make_source_file(file, fmt="md.j2")
@@ -447,9 +431,7 @@ class TestPreprocess:
             "DB count: {{ db.results | length }}\n",
             encoding="utf-8",
         )
-        source = _make_source_file(
-            file, fmt="md.j2", frontmatter={"author": "Ana"}
-        )
+        source = _make_source_file(file, fmt="md.j2", frontmatter={"author": "Ana"})
         context = DataContext(
             project={"title": "Report"},
             data={"items": ["a", "b", "c"]},
@@ -524,9 +506,7 @@ class TestExecuteDbQueries:
     def test_non_sqlite_url_returns_empty(self, tmp_path: Path, caplog) -> None:
         config = ProjectConfig(root=tmp_path)
         config.database.url = "postgresql://localhost/db"
-        config.database.data_queries = [
-            {"alias": "q", "sql": "SELECT 1"}
-        ]
+        config.database.data_queries = [{"alias": "q", "sql": "SELECT 1"}]
 
         with caplog.at_level(logging.WARNING):
             result = execute_db_queries(config)
@@ -536,9 +516,7 @@ class TestExecuteDbQueries:
     def test_missing_db_file_returns_empty(self, tmp_path: Path, caplog) -> None:
         config = ProjectConfig(root=tmp_path)
         config.database.url = "sqlite:///nonexistent.db"
-        config.database.data_queries = [
-            {"alias": "q", "sql": "SELECT 1"}
-        ]
+        config.database.data_queries = [{"alias": "q", "sql": "SELECT 1"}]
 
         with caplog.at_level(logging.WARNING):
             result = execute_db_queries(config)
@@ -569,9 +547,7 @@ class TestExecuteDbQueries:
         try:
             config = ProjectConfig(root=tmp_path)
             config.database.url = f"sqlite:///{db_file.name}"
-            config.database.data_queries = [
-                {"alias": "q", "sql": "SELECT 1"}
-            ]
+            config.database.data_queries = [{"alias": "q", "sql": "SELECT 1"}]
 
             with caplog.at_level(logging.WARNING):
                 result = execute_db_queries(config)
@@ -595,8 +571,7 @@ class TestExtractSqlitePath:
 
     def test_extracts_relative_path(self) -> None:
         assert (
-            _extract_sqlite_path("sqlite:///data/sub/db.sqlite")
-            == "data/sub/db.sqlite"
+            _extract_sqlite_path("sqlite:///data/sub/db.sqlite") == "data/sub/db.sqlite"
         )
 
     def test_non_sqlite_url_returns_none(self) -> None:
