@@ -36,6 +36,7 @@ DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_PDF_HEADER = ""
 DEFAULT_PDF_FOOTER = ""
 DEFAULT_PDF_MATH_FONT = "Latin Modern Math"
+DEFAULT_PDF_MATH_FONT_SIZE = 11
 
 DEFAULT_MARKUP = "pandoc-markdown"
 
@@ -83,6 +84,7 @@ class PdfSection:
     footer: str = DEFAULT_PDF_FOOTER
     template: str | None = None
     math_font: str = DEFAULT_PDF_MATH_FONT
+    math_font_size: int = DEFAULT_PDF_MATH_FONT_SIZE
 
 
 @dataclass
@@ -275,11 +277,15 @@ def _parse_pdf(raw: dict | None) -> PdfSection:
     if not isinstance(raw, dict):
         return PdfSection()
     template = raw.get("template", None)
+    math_font_size = raw.get("math_font_size", DEFAULT_PDF_MATH_FONT_SIZE)
     return PdfSection(
         header=str(raw.get("header", DEFAULT_PDF_HEADER)),
         footer=str(raw.get("footer", DEFAULT_PDF_FOOTER)),
         template=str(template) if template is not None else None,
         math_font=str(raw.get("math_font", DEFAULT_PDF_MATH_FONT)),
+        math_font_size=int(math_font_size)
+        if math_font_size is not None
+        else DEFAULT_PDF_MATH_FONT_SIZE,
     )
 
 
@@ -409,6 +415,7 @@ def _config_to_dict(config: ProjectConfig) -> dict:
             "footer": config.pdf.footer,
             "template": config.pdf.template,
             "math_font": config.pdf.math_font,
+            "math_font_size": config.pdf.math_font_size,
         },
         "markup": {
             "default": config.markup.default,
