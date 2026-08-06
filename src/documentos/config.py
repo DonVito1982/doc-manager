@@ -126,6 +126,13 @@ class ServerSection:
     port: int = DEFAULT_SERVER_PORT
 
 
+@dataclass
+class AssetsSection:
+    """Static assets configuration."""
+
+    extra_dirs: list[str] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Root config container
 # ---------------------------------------------------------------------------
@@ -147,6 +154,7 @@ class ProjectConfig:
         templates: Templates section.
         database: Database section.
         server: Server section.
+        assets: Assets section.
     """
 
     root: Path = field(default_factory=Path)
@@ -158,6 +166,7 @@ class ProjectConfig:
     templates: TemplatesSection = field(default_factory=TemplatesSection)
     database: DatabaseSection = field(default_factory=DatabaseSection)
     server: ServerSection = field(default_factory=ServerSection)
+    assets: AssetsSection = field(default_factory=AssetsSection)
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +215,7 @@ def load_config(path: Path) -> ProjectConfig:
     templates_section = _parse_templates(raw_data.get("templates"))
     database_section = _parse_database(raw_data.get("database"))
     server_section = _parse_server(raw_data.get("server"))
+    assets_section = _parse_assets(raw_data.get("assets"))
 
     config = ProjectConfig(
         root=project_root,
@@ -217,6 +227,7 @@ def load_config(path: Path) -> ProjectConfig:
         templates=templates_section,
         database=database_section,
         server=server_section,
+        assets=assets_section,
     )
 
     # Validate ------------------------------------------------------------------
@@ -336,6 +347,17 @@ def _parse_database(raw: dict | None) -> DatabaseSection:
     )
 
 
+def _parse_assets(raw: dict | None) -> AssetsSection:
+    if not isinstance(raw, dict):
+        return AssetsSection()
+    extra_dirs = raw.get("extra_dirs", [])
+    if not isinstance(extra_dirs, list):
+        extra_dirs = []
+    return AssetsSection(
+        extra_dirs=[str(d) for d in extra_dirs],
+    )
+
+
 def _parse_server(raw: dict | None) -> ServerSection:
     if not isinstance(raw, dict):
         return ServerSection()
@@ -435,6 +457,9 @@ def _config_to_dict(config: ProjectConfig) -> dict:
         "server": {
             "host": config.server.host,
             "port": config.server.port,
+        },
+        "assets": {
+            "extra_dirs": config.assets.extra_dirs,
         },
     }
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from documentos.build.assets import copy_assets
 from documentos.build.collector import collect
 from documentos.config import ConfigError, init_config, load_config
 
@@ -85,6 +86,12 @@ def build():
         raise click.ClickException(str(exc)) from exc
 
     sources = collect(cfg)
+
+    copied = copy_assets(cfg)
+    if copied:
+        click.echo(f"\nActivos copiados: {len(copied)} archivos")
+    else:
+        click.echo("\nActivos: (sin activos adicionales — solo empaquetados)")
 
     if sources:
         for sf in sources:
