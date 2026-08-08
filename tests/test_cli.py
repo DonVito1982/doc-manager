@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
 from click.testing import CliRunner
 
-from documentos.cli import main
+from documentos.build.collector import SourceFile
+from documentos.build.converter import ConvertedFile
+from documentos.cli import (
+    _apply_file_filter,
+    _normalise_path,
+    _resolve_formats,
+    main,
+)
+from documentos.config import ProjectConfig
 
 
 @pytest.fixture
@@ -26,6 +35,13 @@ def _init_project(project_dir: Path, runner: CliRunner) -> None:
         assert r.exit_code == 0, f"init failed: {r.output}"
     finally:
         os.chdir(cwd)
+
+
+def _make_config(root: Path) -> ProjectConfig:
+    """Create a minimal ProjectConfig for testing."""
+    return ProjectConfig(
+        root=root,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -114,48 +130,130 @@ class TestInit:
 
 
 # ---------------------------------------------------------------------------
-# build
+# build — unit tests for helpers
 # ---------------------------------------------------------------------------
 
 
+class TestBuildHelpers:
+    """Tests for internal build pipeline helper functions."""
+
+    def test_resolve_formats_cli_flag_takes_precedence(self, tmp_path: Path):
+        """--format flag overrides everything."""
+        cfg = _make_config(tmp_path)
+        cfg.output.formats = ["html", "pdf", "epub"]
+        source = SourceFile(
+            path=Path("content/doc.md"),
+            format="md",
+            frontmatter={"formats": ["pdf"], "skip_pdf": True},
+        )
+        result = _resolve_formats(source, cfg, "html")
+        assert result == ["html"]
+
+    def test_resolve_formats_frontmatter_formats(self, tmp_path: Path):
+        """frontmatter 'formats' field overrides config."""
+        cfg = _make_config(tmp_path)
+        cfg.output.formats = ["html", "pdf", "epub"]
+        source = SourceFile(
+            path=Path("content/doc.md"),
+            format="md",
+            frontmatter={"formats": ["html"]},
+        )
+        result = _resolve_formats(source, cfg, None)
+        assert result == ["html"]
+
+    def test_resolve_formats_skip_pdf(self, tmp_path: Path):
+        """skip_pdf: true removes pdf from formats."""
+        cfg = _make_config(tmp_path)
+        cfg.output.formats = ["html", "pdf", "epub"]
+        source = SourceFile(
+            path=Path("content/doc.md"),
+            format="md",
+            frontmatter={"skip_pdf": True},
+        )
+        result = _resolve_formats(source, cfg, None)
+        assert result == ["html", "epub"]
+
+    def test_resolve_formats_default(self, tmp_path: Path):
+        """No frontmatter overrides → use config formats."""
+        cfg = _make_config(tmp_path)
+        cfg.output.formats = ["html", "pdf"]
+        source = SourceFile(
+            path=Path("content/doc.md"),
+            format="md",
+            frontmatter={"title": "Doc"},
+        )
+        result = _resolve_formats(source, cfg, None)
+        assert result == ["html", "pdf"]
+
+    def test_resolve_formats_skip_pdf_no_pdf_in_config(self, tmp_path: Path):
+        """skip_pdf when pdf is not in config → no change."""
+        cfg = _make_config(tmp_path)
+        cfg.output.formats = ["html", "epub"]
+        source = SourceFile(
+            path=Path("content/doc.md"),
+            format="md",
+            frontmatter={"skip_pdf": True},
+        )
+        result = _resolve_formats(source, cfg, None)
+        assert result == ["html", "epub"]
+
+    def test_apply_file_filter_no_filter(self, tmp_path: Path):
+        """No --file flag returns all sources."""
+        sources = [
+            SourceFile(path=Path("content/a.md"), format="md"),
+            SourceFile(path=Path("content/b.md"), format="md"),
+        ]
+        result = _apply_file_filter(sources, None)
+        assert len(result) == 2
+
+    def test_apply_file_filter_matches_relative_path(self, tmp_path: Path):
+        """--file flag matches relative path from content/."""
+        sources = [
+            SourceFile(path=Path("content/a.md"), format="md"),
+            SourceFile(path=Path("content/guias/b.md"), format="md"),
+        ]
+        result = _apply_file_filter(sources, "guias/b.md")
+        assert len(result) == 1
+        assert result[0].path == Path("content/guias/b.md")
+
+    def test_apply_file_filter_no_match(self, tmp_path: Path):
+        """Non-matching --file returns empty list."""
+        sources = [
+            SourceFile(path=Path("content/a.md"), format="md"),
+        ]
+        result = _apply_file_filter(sources, "nonexistent.md")
+        assert len(result) == 0
+
+    def test_normalise_path_strips_content_prefix(self):
+        """content prefix is stripped."""
+        assert _normalise_path(Path("content/a.md")) == "a.md"
+        assert _normalise_path(Path("content/guias/b.md")) == "guias/b.md"
+
+    def test_normalise_path_no_prefix(self):
+        """Paths without content prefix returned as-is."""
+        assert _normalise_path(Path("other/a.md")) == "other/a.md"
+
+
+# ---------------------------------------------------------------------------
+# build — CLI integration tests
+# ---------------------------------------------------------------------------
+
+
+_SUCCESS_HTML = ConvertedFile(
+    source=Path("content/index.md"),
+    format="html",
+    output=Path("output/html/index.html"),
+    success=True,
+)
+_SUCCESS_PDF = ConvertedFile(
+    source=Path("content/index.md"),
+    format="pdf",
+    output=Path("output/pdf/index.pdf"),
+    success=True,
+)
+
+
 class TestBuild:
-    def test_build_enumerates_files(self, runner: CliRunner, tmp_path: Path):
-        proj = tmp_path / "proyecto"
-        proj.mkdir()
-        for d in ("content", "data", "templates"):
-            (proj / d).mkdir()
-
-        _init_project(proj, runner)
-
-        (proj / "content" / "a.md").write_text("---\ntitle: A\n---\n# A")
-        (proj / "content" / "b.adoc").write_text("= B")
-
-        cwd = os.getcwd()
-        try:
-            os.chdir(proj)
-            result = runner.invoke(main, ["build"])
-            assert result.exit_code == 0
-            assert "content/a.md [md]" in result.output
-            assert "content/b.adoc [adoc]" in result.output
-        finally:
-            os.chdir(cwd)
-
-    def test_build_shows_pipeline_message(self, runner: CliRunner, tmp_path: Path):
-        proj = tmp_path / "proyecto"
-        proj.mkdir()
-        for d in ("content", "data", "templates"):
-            (proj / d).mkdir()
-        _init_project(proj, runner)
-        (proj / "content" / "doc.md").write_text("# Doc")
-
-        cwd = os.getcwd()
-        try:
-            os.chdir(proj)
-            result = runner.invoke(main, ["build"])
-            assert "Build pipeline no implementado" in result.output
-        finally:
-            os.chdir(cwd)
-
     def test_build_without_config_shows_error(self, runner: CliRunner, tmp_path: Path):
         empty = tmp_path / "empty"
         empty.mkdir()
@@ -168,34 +266,12 @@ class TestBuild:
         finally:
             os.chdir(cwd)
 
-    def test_build_no_content_files_shows_empty_message(
-        self, runner: CliRunner, tmp_path: Path
-    ):
-        proj = tmp_path / "proyecto"
-        proj.mkdir()
-        for d in ("content", "data", "templates"):
-            (proj / d).mkdir()
-        _init_project(proj, runner)
-
-        (proj / "content" / "index.md").unlink()
-
-        cwd = os.getcwd()
-        try:
-            os.chdir(proj)
-            result = runner.invoke(main, ["build"])
-            assert result.exit_code == 0
-            assert "no se encontraron archivos fuente" in result.output.lower()
-            assert "Build pipeline no implementado" in result.output
-        finally:
-            os.chdir(cwd)
-
     def test_build_with_config_error_from_validation(
         self, runner: CliRunner, tmp_path: Path
     ):
         """build shows error when config.yml exists but required dirs are missing."""
         proj = tmp_path / "proyecto"
         proj.mkdir()
-        # Write a valid config.yml but do NOT create content/data/templates dirs
         config_path = proj / "config.yml"
         config_path.write_text('project:\n  title: "Un proyecto"\n', encoding="utf-8")
 
@@ -205,6 +281,457 @@ class TestBuild:
             result = runner.invoke(main, ["build"])
             assert result.exit_code != 0
             assert "Missing required director" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_full_pipeline(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Full pipeline runs successfully with all steps."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "Cargando configuración... OK" in result.output
+            assert "Recolectando archivos fuente" in result.output
+            assert "Cargando archivos de datos" in result.output
+            assert "Ejecutando consultas" in result.output
+            assert "Convirtiendo documentos" in result.output
+            assert "Copiando activos estáticos" in result.output
+            assert "Generando índices" in result.output
+            assert "Build completado" in result.output
+            assert "Salida disponible en output/" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_shows_file_status(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Build output shows per-file conversion status with ✓."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert "✓" in result.output
+            assert "content/index.md" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_summary_shows_format_counts(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Build summary includes format count."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert "Formatos generados:" in result.output
+            assert "html" in result.output
+            assert "Advertencias:" in result.output
+            assert "Errores:" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML, _SUCCESS_PDF])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_summary_multiple_formats(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Build summary shows multiple formats with counts."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert "html (1)" in result.output
+            assert "pdf (1)" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_no_content_files_shows_message(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Empty content dir shows appropriate message."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+        (proj / "content" / "index.md").unlink()
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "no se encontraron archivos fuente" in result.output.lower()
+            assert "Build pipeline no implementado" not in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_format_flag(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """--format html generates only HTML."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build", "--format", "html"])
+            assert result.exit_code == 0
+            assert "Convirtiendo documentos" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_file_flag(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """--file flag filters to one document."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+        # Add a second file to verify filtering
+        (proj / "content" / "other.md").write_text("# Other")
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build", "--file", "index.md"])
+            assert result.exit_code == 0
+            # Only one file should be converted
+            assert mock_convert.call_count == 1
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_format_and_file_flags(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Both --format and --file flags together."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(
+                main, ["build", "--format", "html", "--file", "index.md"]
+            )
+            assert result.exit_code == 0
+            assert mock_convert.call_count == 1
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_help_shows_format_and_file(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+    ):
+        """build --help shows the new options."""
+        result = runner.invoke(main, ["build", "--help"])
+        assert result.exit_code == 0
+        assert "--format" in result.output
+        assert "--file" in result.output
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version")
+    def test_build_pandoc_not_installed(
+        self,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Pandoc not installed → error message and non-zero exit."""
+        mock_pandoc.side_effect = OSError("Pandoc not found")
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code != 0
+            assert "Pandoc no está instalado" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_conversion_warning(
+        self,
+        mock_index,
+        mock_assets,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Failed conversion shows as warning in output."""
+        failed = ConvertedFile(
+            source=Path("content/index.md"),
+            format="pdf",
+            output=Path("output/pdf/index.pdf"),
+            success=False,
+            error="latexmk not installed — PDF generation skipped",
+        )
+
+        with patch("documentos.cli.convert", return_value=[failed]):
+            proj = tmp_path / "proyecto"
+            proj.mkdir()
+            for d in ("content", "data", "templates"):
+                (proj / d).mkdir()
+            _init_project(proj, runner)
+
+            cwd = os.getcwd()
+            try:
+                os.chdir(proj)
+                result = runner.invoke(main, ["build"])
+                assert result.exit_code == 0
+                assert "⚠" in result.output
+                assert "latexmk not installed" in result.output
+                assert "Advertencias: 1" in result.output
+            finally:
+                os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert")
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_conversion_error(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Conversion RuntimeError shows as error in output."""
+        mock_convert.side_effect = RuntimeError("Conversion failed")
+
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "✗" in result.output
+            assert "Conversion failed" in result.output
+            assert "Errores: 1" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_elapsed_time_in_summary(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Build summary includes elapsed time."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert "Build completado en" in result.output
+            assert "s" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", side_effect=OSError("disk full"))
+    def test_build_index_generation_error(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Index generation failure is reported as warning, not fatal."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "Advertencias: 1" in result.output
+            assert "index" in result.output.lower()
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", side_effect=OSError("read-only fs"))
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_assets_error_is_warning(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Assets copy failure is reported as warning."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "Advertencias: 1" in result.output
+            assert "copy_assets" in result.output
         finally:
             os.chdir(cwd)
 
