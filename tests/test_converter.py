@@ -1647,3 +1647,230 @@ class TestPdfMathFont:
         content = config_path.read_text(encoding="utf-8")
         assert "math_font" in content
         assert "Latin Modern Math" in content
+
+
+# ---------------------------------------------------------------------------
+# Per-document template selection (TK-013)
+# ---------------------------------------------------------------------------
+
+
+class TestPerDocumentTemplateHtml:
+    """Tests for per-document HTML template selection via frontmatter."""
+
+    def test_custom_html_template_from_frontmatter(self, tmp_path: Path) -> None:
+        """When frontmatter declares template: custom.html, that template is used."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/report.md")
+        source.frontmatter = {"title": "Report", "template": "custom.html"}
+
+        templates_dir = tmp_path / config.templates.dir
+        templates_dir.mkdir(parents=True)
+        (templates_dir / "custom.html").write_text(
+            "<html>CUSTOM TEMPLATE {% raw %}$body${% endraw %}</html>"
+        )
+
+        captured_template: list[str] = []
+
+        def _capture(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture,
+            ),
+        ):
+            convert(source, config, "# Hello\n")
+
+        assert len(captured_template) == 1
+        assert "CUSTOM TEMPLATE" in captured_template[0]
+        assert "$body$" in captured_template[0]
+
+    def test_no_template_in_frontmatter_uses_default(self, tmp_path: Path) -> None:
+        """When no template field in frontmatter, base.html is used."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Home"}
+
+        captured_template: list[str] = []
+
+        def _capture(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture,
+            ),
+        ):
+            convert(source, config, "# Hello\n")
+
+        assert len(captured_template) == 1
+        assert "$body$" in captured_template[0]
+
+    def test_template_not_found_warns_and_falls_back(self, tmp_path: Path) -> None:
+        """When frontmatter template doesn't exist, warning emitted, default used."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/doc.md")
+        source.frontmatter = {"title": "Doc", "template": "nonexistent.html"}
+
+        captured_template: list[str] = []
+
+        def _capture(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture,
+            ),
+            patch(
+                "documentos.build.converter.logging.warning",
+            ) as mock_warning,
+        ):
+            convert(source, config, "# Hello\n")
+
+        assert len(captured_template) == 1
+        assert "$body$" in captured_template[0]
+        mock_warning.assert_called_once()
+        args, _ = mock_warning.call_args
+        warning_text = args[0] % args[1:]
+        assert "nonexistent.html" in warning_text
+        assert "content/doc.md" in warning_text
+        assert "Falling back to default template" in warning_text
+
+
+class TestPerDocumentTemplatePdf:
+    """Tests for per-document PDF template selection via frontmatter."""
+
+    def test_custom_pdf_template_from_frontmatter(self, tmp_path: Path) -> None:
+        """When frontmatter declares pdf_template: spec.tex, that template is used."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/report.md")
+        source.frontmatter = {"title": "Report", "pdf_template": "spec.tex"}
+
+        templates_dir = tmp_path / config.templates.dir
+        templates_dir.mkdir(parents=True)
+        (templates_dir / "spec.tex").write_text("% custom spec template")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ) as mock_convert,
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+            ),
+        ):
+            convert(source, config, "# Test\n")
+
+        extra_args = mock_convert.call_args[1]["extra_args"]
+        template_args = [a for a in extra_args if a.startswith("--template=")]
+        assert len(template_args) == 1
+        assert "spec.tex" in template_args[0]
+
+    def test_no_pdf_template_in_frontmatter_uses_default_chain(
+        self, tmp_path: Path
+    ) -> None:
+        """When no pdf_template in frontmatter, normal precedence chain is used."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/doc.md")
+        source.frontmatter = {"title": "Doc"}
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ) as mock_convert,
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+            ),
+        ):
+            convert(source, config, "# Test\n")
+
+        extra_args = mock_convert.call_args[1]["extra_args"]
+        template_args = [a for a in extra_args if a.startswith("--template=")]
+        assert len(template_args) == 1
+        assert "latex-template.tex" in template_args[0]
+
+    def test_pdf_template_not_found_warns_and_falls_back(self, tmp_path: Path) -> None:
+        """When frontmatter pdf_template missing, warning emitted, default used."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/doc.md")
+        source.frontmatter = {"title": "Doc", "pdf_template": "missing.tex"}
+
+        def _create_pdf(*args, **kwargs):
+            cwd = kwargs.get("cwd", ".")
+            (Path(cwd) / "doc.pdf").write_text("PDF", encoding="utf-8")
+            return MagicMock()
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ) as mock_convert,
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+                side_effect=_create_pdf,
+            ),
+            patch(
+                "documentos.build.converter.logging.warning",
+            ) as mock_warning,
+        ):
+            convert(source, config, "# Test\n")
+
+        extra_args = mock_convert.call_args[1]["extra_args"]
+        template_args = [a for a in extra_args if a.startswith("--template=")]
+        assert len(template_args) == 1
+
+        mock_warning.assert_called_once()
+        args, _ = mock_warning.call_args
+        warning_text = args[0] % args[1:]
+        assert "missing.tex" in warning_text
+        assert "content/doc.md" in warning_text
+        assert "Falling back to default template" in warning_text
