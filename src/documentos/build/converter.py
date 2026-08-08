@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pypandoc
-from jinja2 import ChoiceLoader, Environment, FileSystemLoader, PackageLoader
+from jinja2 import (
+    ChoiceLoader,
+    Environment,
+    FileSystemLoader,
+    PackageLoader,
+    TemplateNotFound,
+)
 
 from documentos.build.collector import SourceFile
 from documentos.config import ProjectConfig
@@ -352,7 +358,19 @@ def _convert_to_html(
     env = _create_jinja_env(config)
     context = _build_html_context(source, config, all_documents)
 
+    frontmatter_template: str | None = source.frontmatter.get("template")
+    template_name = frontmatter_template or "base.html"
+
     try:
+        rendered_template = env.get_template(template_name).render(**context)
+    except TemplateNotFound:
+        if frontmatter_template:
+            logging.warning(
+                "Template '%s' declared in frontmatter of %s not found in "
+                "templates/. Falling back to default template.",
+                frontmatter_template,
+                source.path,
+            )
         rendered_template = env.get_template("base.html").render(**context)
     except Exception as exc:
         raise RuntimeError(
@@ -528,7 +546,24 @@ def _convert_to_pdf(
         f"--filter={math_filter_path}",
     ]
 
-    template_path = _resolve_latex_template_path(config)
+    pdf_template_name: str | None = source.frontmatter.get("pdf_template")
+    template_path: Path | None = None
+
+    if pdf_template_name:
+        candidate = config.root / config.templates.dir / pdf_template_name
+        if candidate.is_file():
+            template_path = candidate
+        else:
+            logging.warning(
+                "Template '%s' declared in frontmatter of %s not found in "
+                "templates/. Falling back to default template.",
+                pdf_template_name,
+                source.path,
+            )
+
+    if template_path is None:
+        template_path = _resolve_latex_template_path(config)
+
     if template_path is not None:
         latex_extra_args.append(f"--template={template_path}")
 
