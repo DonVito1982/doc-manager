@@ -1232,12 +1232,14 @@ class TestBuildDocumentList:
         assert len(result) == 1
         assert result[0]["title"] == "Home"
         assert result[0]["slug"] == "index.html"
+        assert result[0]["section"] == ""
 
     def test_falls_back_to_stem(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         sf = SourceFile(path=Path("content/guia/intro.md"), format="md")
         result = _build_document_list([sf], config)
         assert result[0]["title"] == "intro"
+        assert result[0]["section"] == "guia"
 
     def test_nested_documents(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
@@ -1287,6 +1289,10 @@ class TestBuildHtmlContext:
         assert ctx["project"]["language"] == "en"
         assert ctx["title"] == "Welcome"
         assert ctx["documents"] == []
+        assert ctx["sections"] == []
+        assert ctx["current_section"] == ""
+        assert ctx["section_title"] == ""
+        assert ctx["breadcrumbs"] == [{"title": "Inicio", "href": "index.html"}]
         assert ctx["assets"] == "assets"
 
     def test_context_with_documents(self, tmp_path: Path) -> None:
@@ -1311,12 +1317,21 @@ class TestBuildHtmlContext:
         assert len(ctx["documents"]) == 2
         assert ctx["documents"][0]["title"] == "Home"
         assert ctx["documents"][1]["title"] == "About"
+        # Sections should be populated
+        assert len(ctx["sections"]) >= 1
+        # current_section for index.md is root
+        assert ctx["current_section"] == ""
+        # breadcrumbs for root document
+        assert len(ctx["breadcrumbs"]) == 1
+        assert ctx["breadcrumbs"][0]["title"] == "Inicio"
 
     def test_context_title_fallback(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         source = _make_source_file("content/readme.md")
         ctx = _build_html_context(source, config, None)
         assert ctx["title"] == "readme"
+        assert ctx["current_section"] == ""
+        assert ctx["sections"] == []
 
 
 class TestBaseHtmlTemplate:

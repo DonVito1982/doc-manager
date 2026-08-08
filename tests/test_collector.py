@@ -346,6 +346,70 @@ class TestCollect:
         assert Path("content/root.md") in paths
         assert Path("content/subdir/nested.md") in paths
 
+    def test_collect_skips_index_md(
+        self, project_config: ProjectConfig, tmp_path: Path
+    ):
+        """_index.md files are NOT collected as SourceFile."""
+        content = tmp_path / "content"
+        (content / "_index.md").write_text("---\ntitle: Root\n---")
+        (content / "doc.md").write_text("# Doc")
+        sub = content / "guias"
+        sub.mkdir()
+        (sub / "_index.md").write_text("---\ntitle: Guías\n---")
+        (sub / "guia.md").write_text("# Guía")
+        results = collect(project_config)
+        assert len(results) == 2
+        paths = {str(r.path) for r in results}
+        assert "content/_index.md" not in paths
+        assert "content/guias/_index.md" not in paths
+        assert "content/doc.md" in paths
+        assert "content/guias/guia.md" in paths
+
+    def test_collect_skips_index_md_j2(
+        self, project_config: ProjectConfig, tmp_path: Path
+    ):
+        """_index.md.j2 files are also NOT collected."""
+        content = tmp_path / "content"
+        (content / "_index.md.j2").write_text("---\ntitle: Root\n---")
+        (content / "doc.md").write_text("# Doc")
+        results = collect(project_config)
+        assert len(results) == 1
+        assert results[0].path == Path("content/doc.md")
+
+
+# ---------------------------------------------------------------------------
+# SourceFile.section property
+# ---------------------------------------------------------------------------
+
+
+class TestSectionProperty:
+    """Tests for the SourceFile.section computed property."""
+
+    def test_root_section(self):
+        """Files directly in content/ have section '' (root)."""
+        sf = SourceFile(path=Path("content/index.md"), format="md")
+        assert sf.section == ""
+
+    def test_first_level_subdir_section(self):
+        """Files in content/<subdir>/ have section <subdir>."""
+        sf = SourceFile(path=Path("content/guias/instalacion.md"), format="md")
+        assert sf.section == "guias"
+
+    def test_deeply_nested_section(self):
+        """Deeply nested files still have first-level section."""
+        sf = SourceFile(path=Path("content/guias/sub/deep.md"), format="md")
+        assert sf.section == "guias"
+
+    def test_no_content_prefix(self):
+        """Files without content prefix return ''."""
+        sf = SourceFile(path=Path("other/doc.md"), format="md")
+        assert sf.section == ""
+
+    def test_single_component_path(self):
+        """Single-component path returns ''."""
+        sf = SourceFile(path=Path("index.md"), format="md")
+        assert sf.section == ""
+
 
 class TestRecognizedSuffixes:
     """Ensure the constant maps correctly."""

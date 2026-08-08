@@ -17,6 +17,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import frontmatter as frontmatter_lib
 import pypandoc
 from jinja2 import (
     ChoiceLoader,
@@ -259,22 +260,103 @@ def _build_document_list(
 ) -> list[dict[str, str]]:
     """Build a list of document dicts for template rendering.
 
-    Each dict contains ``title`` (from frontmatter or filename) and
-    ``slug`` (relative HTML output path).
+    Each dict contains ``title`` (from frontmatter or filename),
+    ``slug`` (relative HTML output path), and ``section`` (the section
+    the document belongs to).
 
     Args:
         documents: List of collected source files.
         config: The project configuration.
 
     Returns:
-        A list of dicts with ``title`` and ``slug`` keys.
+        A list of dicts with ``title``, ``slug``, and ``section`` keys.
     """
     result: list[dict[str, str]] = []
     for doc in documents:
         title = doc.frontmatter.get("title", doc.path.stem)
         html_path = _make_output_path(doc, config, "html")
         slug = str(html_path.relative_to(Path(config.output.dir) / "html"))
-        result.append({"title": str(title), "slug": slug})
+        result.append({"title": str(title), "slug": slug, "section": doc.section})
+    return result
+
+
+def _build_section_structure(
+    all_documents: list[SourceFile],
+    config: ProjectConfig,
+) -> list[dict]:
+    """Group documents by section for the sidebar.
+
+    For each section the optional ``_index.md`` file is read for a display
+    title and weight.  Sections are sorted by weight, then title.
+
+    Args:
+        all_documents: List of all collected source files.
+        config: The project configuration.
+
+    Returns:
+        A list of dicts with keys ``title`` (str), ``weight`` (int),
+        ``documents`` (list of dicts with ``title``, ``slug``, ``section``).
+    """
+    # ------------------------------------------------------------
+    # Group by section
+    # ------------------------------------------------------------
+    groups: dict[str, list[SourceFile]] = {}
+    for doc in all_documents:
+        sec = doc.section
+        groups.setdefault(sec, []).append(doc)
+
+    # ------------------------------------------------------------
+    # Read _index.md metadata and build structure
+    # ------------------------------------------------------------
+    content_dir = config.root / "content"
+    result: list[dict] = []
+
+    for sec_key, docs in groups.items():
+        # Read _index.md for section metadata
+        meta: dict = {}
+        section_dir = content_dir if sec_key == "" else content_dir / sec_key
+        for name in ("_index.md", "_index.md.j2"):
+            path = section_dir / name
+            if path.is_file():
+                try:
+                    post = frontmatter_lib.load(str(path))
+                    if post.metadata:
+                        meta = dict(post.metadata)
+                except Exception:
+                    pass
+                break
+
+        title = meta.get("title", sec_key if sec_key else config.project.title)
+        raw_weight = meta.get("weight")
+        try:
+            weight = (
+                int(raw_weight)
+                if raw_weight is not None
+                else (0 if sec_key == "" else 999)
+            )
+        except (ValueError, TypeError):
+            weight = 0 if sec_key == "" else 999
+
+        # Convert docs to template format, sorted by title
+        doc_list = _build_document_list(
+            sorted(
+                docs,
+                key=lambda s: str(s.frontmatter.get("title", s.path.stem)).casefold(),
+            ),
+            config,
+        )
+
+        result.append(
+            {
+                "title": str(title),
+                "weight": weight,
+                "key": sec_key,
+                "documents": doc_list,
+            }
+        )
+
+    # Sort sections by weight, then title
+    result.sort(key=lambda s: (s["weight"], str(s["title"]).casefold()))
     return result
 
 
@@ -291,9 +373,46 @@ def _build_html_context(
         all_documents: Optional list of all collected source files.
 
     Returns:
-        A dict with keys ``project``, ``title``, ``documents``, ``assets``.
+        A dict with keys ``project``, ``title``, ``documents``,
+        ``sections``, ``current_section``, ``section_title``,
+        ``breadcrumbs``, ``assets``.
     """
     doc_list = _build_document_list(all_documents, config) if all_documents else []
+    sections = _build_section_structure(all_documents, config) if all_documents else []
+
+    # Determine section info for the current document
+    current_section = source.section
+
+    # Find section title for breadcrumbs
+    section_title = ""
+    for sec in sections:
+        if sec.get("key") == current_section:
+            section_title = str(sec["title"])
+            break
+
+    # Build breadcrumbs
+    doc_slug = str(
+        _make_output_path(source, config, "html").relative_to(
+            Path(config.output.dir) / "html"
+        )
+    )
+    # Compute depth: number of parent directories
+    slug_parent = Path(doc_slug).parent
+    if str(slug_parent) == ".":
+        depth = 0
+    else:
+        depth = len(slug_parent.parts)
+
+    root_index_rel = "../" * depth + "index.html" if depth > 0 else "index.html"
+
+    breadcrumbs: list[dict[str, str]] = [
+        {"title": "Inicio", "href": root_index_rel},
+    ]
+
+    if current_section != "":
+        section_index_rel = "index.html"
+        breadcrumbs.append({"title": section_title, "href": section_index_rel})
+
     return {
         "project": {
             "title": config.project.title,
@@ -302,6 +421,10 @@ def _build_html_context(
         },
         "title": source.frontmatter.get("title", source.path.stem),
         "documents": doc_list,
+        "sections": sections,
+        "current_section": current_section,
+        "section_title": section_title,
+        "breadcrumbs": breadcrumbs,
         "assets": "assets",
     }
 

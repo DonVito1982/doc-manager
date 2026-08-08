@@ -38,6 +38,29 @@ class SourceFile:
     frontmatter: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def section(self) -> str:
+        """Return the section name derived from the source path.
+
+        Files directly in ``content/`` belong to the root section (empty
+        string).  Files in a first-level subdirectory of ``content/`` return
+        that subdirectory name.  Deeply nested files still return only the
+        first-level subdirectory name (Hugo-style sections).
+
+        Examples:
+            ``content/index.md`` → ``""``
+            ``content/guias/instalacion.md`` → ``"guias"``
+            ``content/guias/sub/deep.md`` → ``"guias"``
+        """
+        parts = self.path.parts
+        if parts and parts[0] == "content" and len(parts) > 2:
+            return parts[1]
+        return ""
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
