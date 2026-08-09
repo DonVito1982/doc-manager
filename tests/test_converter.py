@@ -1761,6 +1761,85 @@ class TestPerDocumentTemplateHtml:
         assert "Falling back to default template" in warning_text
 
 
+# ---------------------------------------------------------------------------
+# MathJax EPUB support (TK-015)
+# ---------------------------------------------------------------------------
+
+
+class TestEpubMathjax:
+    """Tests for MathJax support in EPUB conversion."""
+
+    def test_epub_receives_mathjax_flag(self, tmp_path: Path) -> None:
+        """Verify --mathjax is passed to pypandoc for EPUB conversion."""
+        config = _make_config(tmp_path, formats=["epub"])
+        source = _make_source_file("content/index.md")
+        config.project.title = "Test"
+        config.project.author = "Tester"
+        config.project.language = "en"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_file",
+            ) as mock_convert_file,
+        ):
+            convert(source, config, "# $x^2$\n")
+
+        call_kwargs = mock_convert_file.call_args[1]
+        extra_args = call_kwargs["extra_args"]
+        assert "--mathjax" in extra_args
+        assert any("--epub-metadata=" in a for a in extra_args)
+
+    def test_epub_math_content_preserved(self, tmp_path: Path) -> None:
+        """Convert markdown with math to EPUB — verify no exception.
+
+        This is an integration test that will be skipped if pandoc is not
+        installed.
+        """
+        pytest.importorskip("pypandoc")
+
+        try:
+            import pypandoc as _pp
+
+            _pp.get_pandoc_version()
+        except (OSError, RuntimeError):
+            pytest.skip("Pandoc not available in PATH")
+
+        config = _make_config(tmp_path, formats=["epub"])
+        source = _make_source_file("content/math_test.md")
+        config.project.title = "Math Test"
+        config.project.author = "Tester"
+        config.project.language = "en"
+
+        preprocessed = (
+            "# Math Test\n\n"
+            "## Inline math\n\n"
+            "The quadratic formula is $x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.\n\n"
+            "## Block math\n\n"
+            "$$E = mc^2$$\n\n"
+            "## More inline\n\n"
+            "Pythagorean theorem: $a^2 + b^2 = c^2$.\n"
+        )
+
+        results = convert(source, config, preprocessed)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert results[0].format == "epub"
+
+        # Verify the EPUB file exists on disk
+        output_file = tmp_path / "output/epub/math_test.epub"
+        assert output_file.is_file()
+        assert output_file.stat().st_size > 0
+
+        # Quick sanity: EPUB is a ZIP file — verify by reading the magic bytes
+        magic = output_file.read_bytes()[:2]
+        assert magic == b"PK"
+
+
 class TestPerDocumentTemplatePdf:
     """Tests for per-document PDF template selection via frontmatter."""
 

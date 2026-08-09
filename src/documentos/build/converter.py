@@ -441,6 +441,7 @@ def _convert_to_epub(
                     "--toc",
                     f"--epub-metadata={metadata_path}",
                     f"--filter={_resolve_math_filter_path()}",
+                    "--mathjax",
                 ],
             )
         except RuntimeError as exc:
