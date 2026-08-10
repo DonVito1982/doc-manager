@@ -11,6 +11,7 @@ packaged defaults.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -256,7 +257,9 @@ def _create_jinja_env(config: ProjectConfig) -> Environment:
 
 
 def _build_document_list(
-    documents: list[SourceFile], config: ProjectConfig
+    documents: list[SourceFile],
+    config: ProjectConfig,
+    current_source: SourceFile | None = None,
 ) -> list[dict[str, str]]:
     """Build a list of document dicts for template rendering.
 
@@ -264,18 +267,39 @@ def _build_document_list(
     ``slug`` (relative HTML output path), and ``section`` (the section
     the document belongs to).
 
+    When *current_source* is provided, slugs are computed relative to
+    the current document's output directory so that sidebar links work
+    correctly when rendered from deeply nested pages.
+
     Args:
         documents: List of collected source files.
         config: The project configuration.
+        current_source: Optional source file being rendered, used to
+            relativize sidebar link slugs.
 
     Returns:
         A list of dicts with ``title``, ``slug``, and ``section`` keys.
     """
     result: list[dict[str, str]] = []
+
+    # Compute the current source's output parent directory
+    # (relative to output/html/) so we can relativize all slugs.
+    current_parent: Path | None = None
+    if current_source is not None:
+        current_slug_full = _make_output_path(current_source, config, "html")
+        current_parent = (
+            current_slug_full.relative_to(Path(config.output.dir) / "html")
+        ).parent
+
     for doc in documents:
         title = doc.frontmatter.get("title", doc.path.stem)
         html_path = _make_output_path(doc, config, "html")
         slug = str(html_path.relative_to(Path(config.output.dir) / "html"))
+
+        # Relativize the slug if we are inside a subdirectory.
+        if current_parent is not None:
+            slug = os.path.relpath(slug, str(current_parent))
+
         result.append({"title": str(title), "slug": slug, "section": doc.section})
     return result
 
@@ -283,19 +307,27 @@ def _build_document_list(
 def _build_section_structure(
     all_documents: list[SourceFile],
     config: ProjectConfig,
+    current_source: SourceFile | None = None,
 ) -> list[dict]:
     """Group documents by section for the sidebar.
 
     For each section the optional ``_index.md`` file is read for a display
     title and weight.  Sections are sorted by weight, then title.
 
+    When *current_source* is provided, document slugs are relativized to
+    the current document's output directory so that sidebar links resolve
+    correctly from deeply nested pages.
+
     Args:
         all_documents: List of all collected source files.
         config: The project configuration.
+        current_source: Optional source file being rendered, used to
+            relativize sidebar link slugs.
 
     Returns:
         A list of dicts with keys ``title`` (str), ``weight`` (int),
-        ``documents`` (list of dicts with ``title``, ``slug``, ``section``).
+        ``key`` (str), ``documents`` (list of dicts with ``title``,
+        ``slug``, ``section``).
     """
     # ------------------------------------------------------------
     # Group by section
@@ -344,6 +376,7 @@ def _build_section_structure(
                 key=lambda s: str(s.frontmatter.get("title", s.path.stem)).casefold(),
             ),
             config,
+            current_source=current_source,
         )
 
         result.append(
@@ -377,8 +410,16 @@ def _build_html_context(
         ``sections``, ``current_section``, ``section_title``,
         ``breadcrumbs``, ``assets``.
     """
-    doc_list = _build_document_list(all_documents, config) if all_documents else []
-    sections = _build_section_structure(all_documents, config) if all_documents else []
+    doc_list = (
+        _build_document_list(all_documents, config, current_source=source)
+        if all_documents
+        else []
+    )
+    sections = (
+        _build_section_structure(all_documents, config, current_source=source)
+        if all_documents
+        else []
+    )
 
     # Determine section info for the current document
     current_section = source.section
@@ -413,6 +454,9 @@ def _build_html_context(
         section_index_rel = "index.html"
         breadcrumbs.append({"title": section_title, "href": section_index_rel})
 
+    # Assets prefix: relative path from current doc to output/html/assets/
+    assets_prefix = "../" * depth
+
     return {
         "project": {
             "title": config.project.title,
@@ -425,7 +469,7 @@ def _build_html_context(
         "current_section": current_section,
         "section_title": section_title,
         "breadcrumbs": breadcrumbs,
-        "assets": "assets",
+        "assets": f"{assets_prefix}assets",
     }
 
 
