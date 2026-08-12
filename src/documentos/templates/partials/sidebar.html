@@ -1,3 +1,18 @@
+{% if sections|default([]) %}
+<aside class="sidebar">
+    <h2>Documentos</h2>
+    {% for section in sections %}
+    <details open>
+        <summary>{{ section.title }}</summary>
+        <ul>
+            {% for doc in section.documents %}
+            <li><a href="{{ doc.slug }}">{{ doc.title }}</a></li>
+            {% endfor %}
+        </ul>
+    </details>
+    {% endfor %}
+</aside>
+{% else %}
 <aside class="sidebar">
     <h2>Documentos</h2>
     <ul>
@@ -6,3 +21,4 @@
         {% endfor %}
     </ul>
 </aside>
+{% endif %}

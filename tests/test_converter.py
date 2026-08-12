@@ -1213,6 +1213,214 @@ class TestJinjaEnv:
         assert "sidebar" in rendered
 
 
+class TestRelativePaths:
+    """Tests for relative-path computation in sidebar, assets, and breadcrumbs."""
+
+    def test_assets_root_level(self, tmp_path: Path) -> None:
+        """Root-level document uses 'assets' with no prefix."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Home"}
+        ctx = _build_html_context(source, config, None)
+        assert ctx["assets"] == "assets"
+
+    def test_assets_one_level_deep(self, tmp_path: Path) -> None:
+        """Document one level deep uses '../assets'."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guias/instalacion.md")
+        source.frontmatter = {"title": "Instalación"}
+        ctx = _build_html_context(source, config, None)
+        assert ctx["assets"] == "../assets"
+
+    def test_assets_two_levels_deep(self, tmp_path: Path) -> None:
+        """Document two levels deep uses '../../assets'."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guias/sub/deep.md")
+        source.frontmatter = {"title": "Deep"}
+        ctx = _build_html_context(source, config, None)
+        assert ctx["assets"] == "../../assets"
+
+    def test_document_list_root_level_slugs_unchanged(self, tmp_path: Path) -> None:
+        """Root doc sees absolute-relative slugs (no prefix needed)."""
+        config = _make_config(tmp_path)
+        docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+        ]
+        result = _build_document_list(docs, config)
+        slugs = {d["slug"] for d in result}
+        assert "index.html" in slugs
+        assert "guias/instalacion.html" in slugs
+
+    def test_document_list_relative_to_subdir(self, tmp_path: Path) -> None:
+        """A doc in guias/ sees other docs' slugs relative to guias/."""
+        config = _make_config(tmp_path)
+        current = SourceFile(
+            path=Path("content/guias/instalacion.md"),
+            format="md",
+            frontmatter={"title": "Instalación"},
+        )
+        docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/api/referencia.md"),
+                format="md",
+                frontmatter={"title": "Referencia"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+            SourceFile(
+                path=Path("content/guias/configuracion.md"),
+                format="md",
+                frontmatter={"title": "Configuración"},
+            ),
+        ]
+        result = _build_document_list(docs, config, current_source=current)
+        slugs_by_title = {d["title"]: d["slug"] for d in result}
+        # Cross-section link needs ../
+        assert slugs_by_title["Home"] == "../index.html"
+        assert slugs_by_title["Referencia"] == "../api/referencia.html"
+        # Same-section links are flat filenames
+        assert slugs_by_title["Instalación"] == "instalacion.html"
+        assert slugs_by_title["Configuración"] == "configuracion.html"
+
+    def test_document_list_relative_to_root(self, tmp_path: Path) -> None:
+        """A root-level doc sees all slugs as-is."""
+        config = _make_config(tmp_path)
+        current = SourceFile(
+            path=Path("content/index.md"),
+            format="md",
+            frontmatter={"title": "Home"},
+        )
+        docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+        ]
+        result = _build_document_list(docs, config, current_source=current)
+        slugs_by_title = {d["title"]: d["slug"] for d in result}
+        assert slugs_by_title["Home"] == "index.html"
+        assert slugs_by_title["Instalación"] == "guias/instalacion.html"
+
+    def test_context_documents_relativized(self, tmp_path: Path) -> None:
+        """_build_html_context docs list has relativized slugs."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guias/instalacion.md")
+        source.frontmatter = {"title": "Instalación"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/api/referencia.md"),
+                format="md",
+                frontmatter={"title": "API Ref"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+        ]
+        ctx = _build_html_context(source, config, all_docs)
+        slugs_by_title = {d["title"]: d["slug"] for d in ctx["documents"]}
+        assert slugs_by_title["Home"] == "../index.html"
+        assert slugs_by_title["API Ref"] == "../api/referencia.html"
+        assert slugs_by_title["Instalación"] == "instalacion.html"
+
+    def test_context_sections_relativized(self, tmp_path: Path) -> None:
+        """Section structure documents have relativized slugs."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guias/instalacion.md")
+        source.frontmatter = {"title": "Instalación"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/api/referencia.md"),
+                format="md",
+                frontmatter={"title": "API Ref"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+        ]
+        ctx = _build_html_context(source, config, all_docs)
+        sections = ctx["sections"]
+        assert len(sections) >= 1
+
+        # Find the guias section
+        guias_sec = next(s for s in sections if s["key"] == "guias")
+        guias_slugs = {d["title"]: d["slug"] for d in guias_sec["documents"]}
+        # Same-section doc has flat link
+        assert guias_slugs["Instalación"] == "instalacion.html"
+
+        # Find the api section (cross-section from guias)
+        api_sec = next(s for s in sections if s["key"] == "api")
+        api_slugs = {d["title"]: d["slug"] for d in api_sec["documents"]}
+        assert api_slugs["API Ref"] == "../api/referencia.html"
+
+    def test_depth_two_sidebar_slugs(self, tmp_path: Path) -> None:
+        """Documents at depth 2 use '../../' prefix for cross-section links."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/a/b/doc.md")
+        source.frontmatter = {"title": "Doc profundo"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/guias/instalacion.md"),
+                format="md",
+                frontmatter={"title": "Instalación"},
+            ),
+            SourceFile(
+                path=Path("content/a/b/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc profundo"},
+            ),
+        ]
+        result = _build_document_list(all_docs, config, current_source=source)
+        slugs_by_title = {d["title"]: d["slug"] for d in result}
+        assert slugs_by_title["Home"] == "../../index.html"
+        assert slugs_by_title["Instalación"] == "../../guias/instalacion.html"
+        assert slugs_by_title["Doc profundo"] == "doc.html"
+
+
 class TestBuildDocumentList:
     """Tests for the _build_document_list helper."""
 
@@ -1232,12 +1440,14 @@ class TestBuildDocumentList:
         assert len(result) == 1
         assert result[0]["title"] == "Home"
         assert result[0]["slug"] == "index.html"
+        assert result[0]["section"] == ""
 
     def test_falls_back_to_stem(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         sf = SourceFile(path=Path("content/guia/intro.md"), format="md")
         result = _build_document_list([sf], config)
         assert result[0]["title"] == "intro"
+        assert result[0]["section"] == "guia"
 
     def test_nested_documents(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
@@ -1287,6 +1497,10 @@ class TestBuildHtmlContext:
         assert ctx["project"]["language"] == "en"
         assert ctx["title"] == "Welcome"
         assert ctx["documents"] == []
+        assert ctx["sections"] == []
+        assert ctx["current_section"] == ""
+        assert ctx["section_title"] == ""
+        assert ctx["breadcrumbs"] == [{"title": "Inicio", "href": "index.html"}]
         assert ctx["assets"] == "assets"
 
     def test_context_with_documents(self, tmp_path: Path) -> None:
@@ -1311,12 +1525,21 @@ class TestBuildHtmlContext:
         assert len(ctx["documents"]) == 2
         assert ctx["documents"][0]["title"] == "Home"
         assert ctx["documents"][1]["title"] == "About"
+        # Sections should be populated
+        assert len(ctx["sections"]) >= 1
+        # current_section for index.md is root
+        assert ctx["current_section"] == ""
+        # breadcrumbs for root document
+        assert len(ctx["breadcrumbs"]) == 1
+        assert ctx["breadcrumbs"][0]["title"] == "Inicio"
 
     def test_context_title_fallback(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
         source = _make_source_file("content/readme.md")
         ctx = _build_html_context(source, config, None)
         assert ctx["title"] == "readme"
+        assert ctx["current_section"] == ""
+        assert ctx["sections"] == []
 
 
 class TestBaseHtmlTemplate:

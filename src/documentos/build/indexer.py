@@ -1,14 +1,15 @@
 """Index generation for the build pipeline.
 
-Creates ``output/html/index.html`` — a navigation page listing all documents
-with links to their HTML output.  Respects ``content/.index.yml`` ordering
-when present; otherwise sorts alphabetically by frontmatter title.
+Creates per-section navigation pages under ``output/html/``.  Sections are
+detected automatically from the ``content/`` directory structure (Hugo-style)
+or defined explicitly via ``content/.index.yml`` for backward compatibility.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import frontmatter
 import yaml
 
 from documentos.build.collector import SourceFile
@@ -23,38 +24,196 @@ from documentos.config import ProjectConfig
 def generate_index(
     sources: list[SourceFile],
     config: ProjectConfig,
-) -> Path:
-    """Generate the project navigation index at ``output/html/index.html``.
+) -> list[Path]:
+    """Generate section-based navigation indices.
 
-    If ``content/.index.yml`` exists the document order and section grouping
-    declared there are respected.  Otherwise documents are listed
-    alphabetically by their frontmatter title (falling back to the filename
-    stem if no title exists).
+    If ``content/.index.yml`` exists, the sections and document ordering
+    declared there are used (backward compatibility).  Otherwise sections
+    are discovered automatically from the ``content/`` directory structure
+    and per-section ``_index.md`` metadata.
 
     Args:
-        sources: Collected source files to include in the index.
+        sources: Collected source files to include in the indices.
         config: The project configuration.
 
     Returns:
-        Absolute path to the generated ``index.html`` file.
+        List of absolute paths to all generated ``index.html`` files.
     """
     index_yml = config.root / "content" / ".index.yml"
 
     if index_yml.is_file():
-        sections = _parse_index_yml(index_yml)
-        html = _render_sectioned_index(sections, sources, config)
-    else:
-        html = _render_flat_index(sources, config)
+        return _generate_from_index_yml(sources, config, index_yml)
+
+    sections = build_section_index(config, sources)
+    return generate_section_pages(config, sections)
+
+
+def build_section_index(
+    config: ProjectConfig,
+    sources: list[SourceFile],
+) -> list[dict]:
+    """Group source files by their ``section`` property and extract metadata.
+
+    For each section the optional ``_index.md`` file is read to obtain a
+    display ``title`` and ordering ``weight``.  When ``_index.md`` is missing
+    the directory name is used as title and sections are ordered
+    alphabetically.
+
+    Args:
+        config: The project configuration.
+        sources: Collected source files.
+
+    Returns:
+        A list of dicts, each with keys ``key`` (str), ``title`` (str),
+        ``weight`` (int), and ``documents`` (list of ``SourceFile``).
+    """
+    # ------------------------------------------------------------
+    # Group sources by section
+    # ------------------------------------------------------------
+    sections_map: dict[str, list[SourceFile]] = {}
+    for src in sources:
+        sec = src.section
+        sections_map.setdefault(sec, []).append(src)
+
+    # When there are no sources, still return the root section with no docs
+    if not sections_map:
+        sections_map[""] = []
+
+    # ------------------------------------------------------------
+    # Read _index.md metadata for each section
+    # ------------------------------------------------------------
+    result: list[dict] = []
+    for sec_key, docs in sections_map.items():
+        meta = _parse_section_meta(config, sec_key)
+        title = meta.get("title", sec_key if sec_key else config.project.title)
+        weight = meta.get("weight")
+        if weight is not None:
+            try:
+                weight = int(weight)
+            except (ValueError, TypeError):
+                weight = 999
+        else:
+            weight = 0 if sec_key == "" else 999
+
+        result.append(
+            {
+                "key": sec_key,
+                "title": str(title),
+                "weight": weight,
+                "documents": docs,
+            }
+        )
+
+    # ------------------------------------------------------------
+    # Sort sections by weight, then alphabetically by title
+    # ------------------------------------------------------------
+    result.sort(key=lambda s: (s["weight"], s["title"].casefold()))
+    return result
+
+
+def generate_section_pages(
+    config: ProjectConfig,
+    sections: list[dict],
+) -> list[Path]:
+    """Generate per-section ``index.html`` files.
+
+    The root section (``key == ""``) produces ``output/html/index.html``.
+    Other sections produce ``output/html/<key>/index.html``.  Documents are
+    sorted alphabetically by frontmatter title within each section.
+
+    If ``content/.index.yml`` exists it is consulted for per-document
+    ordering within sections.
+
+    Args:
+        config: The project configuration.
+        sections: Section definitions as returned by ``build_section_index``.
+
+    Returns:
+        List of absolute paths to all generated ``index.html`` files.
+    """
+    # Load .index.yml for ordering — applies to all sections
+    index_yml = config.root / "content" / ".index.yml"
+    yml_order: dict[str, int] = {}
+
+    if index_yml.is_file():
+        yml_sections = _parse_index_yml(index_yml)
+        # Flatten all file references with their position
+        for yml_sec in yml_sections:
+            for idx, file_ref in enumerate(yml_sec.get("files", [])):
+                yml_order[file_ref] = idx
 
     output_dir = config.root / config.output.dir / "html"
     output_dir.mkdir(parents=True, exist_ok=True)
-    index_path = output_dir / "index.html"
-    index_path.write_text(html, encoding="utf-8")
-    return index_path
+    generated: list[Path] = []
+
+    for section in sections:
+        sec_key: str = section["key"]
+        sec_title: str = section["title"]
+        docs: list[SourceFile] = section["documents"]
+
+        # Sort documents by .index.yml order or alphabetically by title
+        if yml_order:
+            docs = _sort_by_yml_order(docs, yml_order)
+        else:
+            docs = sorted(
+                docs,
+                key=lambda s: str(s.frontmatter.get("title", s.path.stem)).casefold(),
+            )
+
+        html = _render_section_page(
+            section_title=sec_title,
+            section_key=sec_key,
+            documents=docs,
+            config=config,
+        )
+
+        if sec_key == "":
+            page_path = output_dir / "index.html"
+        else:
+            section_dir = output_dir / sec_key
+            section_dir.mkdir(parents=True, exist_ok=True)
+            page_path = section_dir / "index.html"
+
+        page_path.write_text(html, encoding="utf-8")
+        generated.append(page_path)
+
+    return generated
 
 
 # ---------------------------------------------------------------------------
-# Internal — index.yml parsing
+# Internal — section metadata (via _index.md)
+# ---------------------------------------------------------------------------
+
+
+def _parse_section_meta(config: ProjectConfig, section: str) -> dict:
+    """Parse ``_index.md`` (or ``_index.md.j2``) for section metadata.
+
+    Args:
+        config: The project configuration.
+        section: Section key (``""`` for root).
+
+    Returns:
+        Dict with ``title`` and ``weight`` keys (both optional).
+    """
+    content_dir = config.root / "content"
+    section_dir = content_dir if section == "" else content_dir / section
+
+    for name in ("_index.md", "_index.md.j2"):
+        path = section_dir / name
+        if path.is_file():
+            try:
+                post = frontmatter.load(str(path))
+                if post.metadata:
+                    return dict(post.metadata)
+            except Exception:
+                pass
+            break
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Internal — .index.yml parsing (backward compatibility)
 # ---------------------------------------------------------------------------
 
 
@@ -90,12 +249,50 @@ def _parse_index_yml(path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Internal — .index.yml-based generation (backward compatibility)
+# ---------------------------------------------------------------------------
+
+
+def _generate_from_index_yml(
+    sources: list[SourceFile],
+    config: ProjectConfig,
+    index_yml: Path,
+) -> list[Path]:
+    """Generate a single ``index.html`` using ``.index.yml`` section
+    definitions (backward compatibility path)."""
+    yml_sections = _parse_index_yml(index_yml)
+    source_map: dict[str, SourceFile] = {str(s.path): s for s in sources}
+
+    html = _render_yml_index(yml_sections, source_map, config)
+
+    output_dir = config.root / config.output.dir / "html"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    index_path = output_dir / "index.html"
+    index_path.write_text(html, encoding="utf-8")
+    return [index_path]
+
+
+# ---------------------------------------------------------------------------
 # Internal — document info helpers
 # ---------------------------------------------------------------------------
 
 
-def _build_doc_info(source: SourceFile, config: ProjectConfig) -> dict[str, str]:
+def _build_doc_info(
+    source: SourceFile,
+    config: ProjectConfig,
+    section_key: str = "",
+) -> dict[str, str]:
     """Extract title and HTML link from a source file.
+
+    The *section_key* is used to compute a relative ``href`` from the
+    section's index page.  For the root section the href is the path
+    relative to ``output/html/``.  For a sub-section the href is relative
+    to ``output/html/<section>/``.
+
+    Args:
+        source: The source file.
+        config: The project configuration.
+        section_key: The section key (``""`` for root section).
 
     Returns:
         Dict with ``title`` and ``href`` keys.
@@ -103,13 +300,31 @@ def _build_doc_info(source: SourceFile, config: ProjectConfig) -> dict[str, str]
     title = source.frontmatter.get("title", source.path.stem)
     html_path = _make_output_path(source, config, "html")
     prefix = Path(config.output.dir) / "html"
-    href = str(html_path.relative_to(prefix))
+
+    if section_key:
+        # For sub-sections, link relative to section directory
+        section_prefix = prefix / section_key
+        href = str(html_path.relative_to(section_prefix))
+    else:
+        href = str(html_path.relative_to(prefix))
+
     return {"title": str(title), "href": href}
 
 
-def _sort_by_title(docs: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Sort a list of doc info dicts alphabetically by title (case-insensitive)."""
-    return sorted(docs, key=lambda d: d["title"].casefold())
+def _sort_by_yml_order(
+    docs: list[SourceFile], yml_order: dict[str, int]
+) -> list[SourceFile]:
+    """Sort documents by their position in ``.index.yml``.
+
+    Files not listed in *yml_order* appear at the end, sorted alphabetically.
+    """
+    return sorted(
+        docs,
+        key=lambda s: (
+            yml_order.get(str(s.path), 999999),
+            str(s.frontmatter.get("title", s.path.stem)).casefold(),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,45 +372,63 @@ _HTML_FOOTER = """\
 """
 
 
-def _render_flat_index(
-    sources: list[SourceFile],
+def _render_section_page(
+    section_title: str,
+    section_key: str,
+    documents: list[SourceFile],
     config: ProjectConfig,
 ) -> str:
-    """Render an index with documents sorted alphabetically by title."""
-    docs = _sort_by_title([_build_doc_info(s, config) for s in sources])
+    """Render a single section index page.
+
+    For the root section the page title includes the project title.
+    For sub-sections it includes both the section title and project title.
+    """
+    doc_infos = [_build_doc_info(d, config, section_key) for d in documents]
+
+    if section_key == "":
+        page_title = f"{config.project.title} — Índice"
+    else:
+        page_title = f"{section_title} — {config.project.title}"
+
     lines: list[str] = []
     lines.append(
         _HTML_HEADER.format(
             lang=config.project.language,
-            title=f"{config.project.title} — Índice",
+            title=page_title,
             css=_CSS,
         )
     )
-    lines.append(f"<h1>{_escape_html(config.project.title)}</h1>")
 
-    if docs:
+    if section_key == "":
+        lines.append(f"<h1>{_escape_html(config.project.title)}</h1>")
+    else:
+        lines.append(f"<h1>{_escape_html(section_title)}</h1>")
+        lines.append(
+            f'<p><a href="../index.html">'
+            f"← Volver al índice de {_escape_html(config.project.title)}</a></p>"
+        )
+
+    if doc_infos:
         lines.append("<ul>")
-        for doc in docs:
+        for doc in doc_infos:
             lines.append(
                 f'<li><a href="{_escape_attr(doc["href"])}">'
                 f"{_escape_html(doc['title'])}</a></li>"
             )
         lines.append("</ul>")
     else:
-        lines.append("<p>No hay documentos.</p>")
+        lines.append("<p>No hay documentos en esta sección.</p>")
 
     lines.append(_HTML_FOOTER)
     return "\n".join(lines)
 
 
-def _render_sectioned_index(
+def _render_yml_index(
     sections: list[dict],
-    sources: list[SourceFile],
+    source_map: dict[str, SourceFile],
     config: ProjectConfig,
 ) -> str:
-    """Render an index respecting explicit ``.index.yml`` sections."""
-    source_map: dict[str, SourceFile] = {str(s.path): s for s in sources}
-
+    """Render a single index respecting explicit ``.index.yml`` sections."""
     lines: list[str] = []
     lines.append(
         _HTML_HEADER.format(

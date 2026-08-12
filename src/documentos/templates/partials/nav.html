@@ -1,3 +1,16 @@
+{% if breadcrumbs|default([]) %}
+<nav class="site-nav">
+    {% for crumb in breadcrumbs %}
+    {% if not loop.last %}
+    <a href="{{ crumb.href }}">{{ crumb.title }}</a> &gt;
+    {% else %}
+    <span>{{ crumb.title }}</span>
+    {% endif %}
+    {% endfor %}
+     &gt; <span>{{ title }}</span>
+</nav>
+{% else %}
 <nav class="site-nav">
     <a href="index.html">{{ project.title }}</a>
 </nav>
+{% endif %}
