@@ -3,6 +3,11 @@
 Creates per-section navigation pages under ``output/html/``.  Sections are
 detected automatically from the ``content/`` directory structure (Hugo-style)
 or defined explicitly via ``content/.index.yml`` for backward compatibility.
+
+When a section has an ``index.md`` (or ``index.md.j2``) file, the converter
+handles index page generation — the indexer skips that section entirely.
+Sections without an ``index.md`` are rendered using the Jinja2
+``index_default.html`` template.
 """
 
 from __future__ import annotations
@@ -13,7 +18,10 @@ import frontmatter
 import yaml
 
 from documentos.build.collector import SourceFile
-from documentos.build.converter import _make_output_path
+from documentos.build.converter import (
+    _create_jinja_env,
+    _make_output_path,
+)
 from documentos.config import ProjectConfig
 
 # ---------------------------------------------------------------------------
@@ -42,7 +50,10 @@ def generate_index(
     index_yml = config.root / "content" / ".index.yml"
 
     if index_yml.is_file():
-        return _generate_from_index_yml(sources, config, index_yml)
+        result = _generate_from_index_yml(sources, config, index_yml)
+        if result:
+            return result
+        # Fall back to section-based when .index.yml yields nothing
 
     sections = build_section_index(config, sources)
     return generate_section_pages(config, sections)
@@ -115,11 +126,15 @@ def generate_section_pages(
     config: ProjectConfig,
     sections: list[dict],
 ) -> list[Path]:
-    """Generate per-section ``index.html`` files.
+    """Generate per-section ``index.html`` files using Jinja2 templates.
 
-    The root section (``key == ""``) produces ``output/html/index.html``.
-    Other sections produce ``output/html/<key>/index.html``.  Documents are
-    sorted alphabetically by frontmatter title within each section.
+    Sections that already have an ``index.md`` (or ``index.md.j2``) file on
+    disk are **skipped** — the converter handles those via the
+    ``index_default.html`` template.
+
+    For sections **without** an ``index.md``, the ``index_default.html``
+    template is rendered with ``body`` empty and ``section_documents``
+    populated from the section's document list.
 
     If ``content/.index.yml`` exists it is consulted for per-document
     ordering within sections.
@@ -146,10 +161,22 @@ def generate_section_pages(
     output_dir.mkdir(parents=True, exist_ok=True)
     generated: list[Path] = []
 
+    env = _create_jinja_env(config)
+    content_dir = config.root / "content"
+
     for section in sections:
         sec_key: str = section["key"]
-        sec_title: str = section["title"]
         docs: list[SourceFile] = section["documents"]
+
+        # --------------------------------------------------------
+        # Check whether this section has its own index.md → skip
+        # --------------------------------------------------------
+        section_dir = content_dir if sec_key == "" else content_dir / sec_key
+        has_index_md = any(
+            (section_dir / name).is_file() for name in ("index.md", "index.md.j2")
+        )
+        if has_index_md:
+            continue
 
         # Sort documents by .index.yml order or alphabetically by title
         if yml_order:
@@ -160,21 +187,24 @@ def generate_section_pages(
                 key=lambda s: str(s.frontmatter.get("title", s.path.stem)).casefold(),
             )
 
-        html = _render_section_page(
-            section_title=sec_title,
-            section_key=sec_key,
-            documents=docs,
-            config=config,
-        )
+        # Build context for Jinja2
+        context = _build_index_context(config, section, docs, sections)
+
+        try:
+            rendered = env.get_template("index_default.html").render(**context)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to render index for section '{sec_key}': {exc}"
+            ) from exc
 
         if sec_key == "":
             page_path = output_dir / "index.html"
         else:
-            section_dir = output_dir / sec_key
-            section_dir.mkdir(parents=True, exist_ok=True)
-            page_path = section_dir / "index.html"
+            section_output_dir = output_dir / sec_key
+            section_output_dir.mkdir(parents=True, exist_ok=True)
+            page_path = section_output_dir / "index.html"
 
-        page_path.write_text(html, encoding="utf-8")
+        page_path.write_text(rendered, encoding="utf-8")
         generated.append(page_path)
 
     return generated
@@ -258,17 +288,55 @@ def _generate_from_index_yml(
     config: ProjectConfig,
     index_yml: Path,
 ) -> list[Path]:
-    """Generate a single ``index.html`` using ``.index.yml`` section
-    definitions (backward compatibility path)."""
+    """Generate section-based pages using ``.index.yml`` section definitions.
+
+    Uses Jinja2 ``index_default.html`` template for consistent output.
+    """
     yml_sections = _parse_index_yml(index_yml)
     source_map: dict[str, SourceFile] = {str(s.path): s for s in sources}
 
-    html = _render_yml_index(yml_sections, source_map, config)
-
+    env = _create_jinja_env(config)
     output_dir = config.root / config.output.dir / "html"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Accumulate all documents across all YML sections
+    all_docs: list[SourceFile] = []
+    for yml_sec in yml_sections:
+        for file_ref in yml_sec["files"]:
+            src = source_map.get(file_ref)
+            if src is not None:
+                all_docs.append(src)
+
+    if not all_docs:
+        return []
+
+    doc_infos = [_build_doc_info(d, config) for d in all_docs]
+
+    context = {
+        "project": {
+            "title": config.project.title,
+            "author": config.project.author,
+            "language": config.project.language,
+        },
+        "title": f"{config.project.title} — Índice",
+        "body": "",
+        "documents": doc_infos,
+        "sections": [],
+        "assets": "assets",
+        "breadcrumbs": [
+            {"title": "Inicio", "href": "index.html"},
+            {"title": f"{config.project.title} — Índice", "href": ""},
+        ],
+        "section_documents": doc_infos,
+    }
+
+    try:
+        rendered = env.get_template("index_default.html").render(**context)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to render .index.yml index: {exc}") from exc
+
     index_path = output_dir / "index.html"
-    index_path.write_text(html, encoding="utf-8")
+    index_path.write_text(rendered, encoding="utf-8")
     return [index_path]
 
 
@@ -289,6 +357,9 @@ def _build_doc_info(
     relative to ``output/html/``.  For a sub-section the href is relative
     to ``output/html/<section>/``.
 
+    Cross-section references are correctly relativized using
+    ``os.path.relpath``.
+
     Args:
         source: The source file.
         config: The project configuration.
@@ -297,18 +368,42 @@ def _build_doc_info(
     Returns:
         Dict with ``title`` and ``href`` keys.
     """
+    import os
+
     title = source.frontmatter.get("title", source.path.stem)
     html_path = _make_output_path(source, config, "html")
     prefix = Path(config.output.dir) / "html"
 
     if section_key:
-        # For sub-sections, link relative to section directory
-        section_prefix = prefix / section_key
-        href = str(html_path.relative_to(section_prefix))
+        # For sub-sections, compute relative from section directory
+        section_index_dir = prefix / section_key
+        href = os.path.relpath(str(html_path), str(section_index_dir))
     else:
         href = str(html_path.relative_to(prefix))
 
     return {"title": str(title), "href": href}
+
+
+def _build_doc_slug_info(
+    source: SourceFile,
+    config: ProjectConfig,
+    section_key: str = "",
+) -> dict[str, str]:
+    """Extract title and slug from a source file for template context.
+
+    Similar to ``_build_doc_info`` but returns ``slug`` key instead of
+    ``href`` (for consistency with the converter's template context).
+
+    Args:
+        source: The source file.
+        config: The project configuration.
+        section_key: The section key (``""`` for root section).
+
+    Returns:
+        Dict with ``title`` and ``slug`` keys.
+    """
+    info = _build_doc_info(source, config, section_key)
+    return {"title": info["title"], "slug": info["href"]}
 
 
 def _sort_by_yml_order(
@@ -328,137 +423,96 @@ def _sort_by_yml_order(
 
 
 # ---------------------------------------------------------------------------
-# Internal — HTML rendering
+# Internal — Jinja2 context builder for index pages
 # ---------------------------------------------------------------------------
 
 
-_CSS = """\
-    body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        max-width: 800px; margin: 2rem auto; padding: 0 1rem;
-        color: #333; line-height: 1.6;
-    }
-    h1 { border-bottom: 2px solid #e0e0e0; padding-bottom: 0.5rem; }
-    h2 { color: #555; margin-top: 2rem; }
-    ul { padding-left: 1.5rem; }
-    li { margin: 0.3rem 0; }
-    a { color: #0366d6; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .footer {
-        margin-top: 3rem; padding-top: 1rem;
-        border-top: 1px solid #e0e0e0; color: #888; font-size: 0.9rem;
-    }
-"""
-
-_HTML_HEADER = """\
-<!DOCTYPE html>
-<html lang="{lang}">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title>
-<style>
-{css}</style>
-</head>
-<body>
-"""
-
-_HTML_FOOTER = """\
-<div class="footer">
-<p>Generado por documentos — gestor de documentación para firmas de ingeniería.</p>
-</div>
-</body>
-</html>
-"""
-
-
-def _render_section_page(
-    section_title: str,
-    section_key: str,
-    documents: list[SourceFile],
+def _build_index_context(
     config: ProjectConfig,
-) -> str:
-    """Render a single section index page.
+    section: dict,
+    docs: list[SourceFile],
+    all_sections: list[dict],
+) -> dict:
+    """Build the Jinja2 context for an index page.
 
-    For the root section the page title includes the project title.
-    For sub-sections it includes both the section title and project title.
+    Args:
+        config: The project configuration.
+        section: Section dict with keys ``key``, ``title``, ``weight``,
+            ``documents``.
+        docs: Pre-sorted documents for this section.
+        all_sections: All section definitions (for sidebar).
+
+    Returns:
+        A dict suitable for rendering ``index_default.html``.
     """
-    doc_infos = [_build_doc_info(d, config, section_key) for d in documents]
+    sec_key: str = section["key"]
+    sec_title: str = section["title"]
 
-    if section_key == "":
-        page_title = f"{config.project.title} — Índice"
-    else:
-        page_title = f"{section_title} — {config.project.title}"
+    # Build document list with slugs relative to the index page location
+    doc_infos: list[dict[str, str]] = []
+    for doc in docs:
+        info = _build_doc_slug_info(doc, config, sec_key)
+        doc_infos.append(info)
 
-    lines: list[str] = []
-    lines.append(
-        _HTML_HEADER.format(
-            lang=config.project.language,
-            title=page_title,
-            css=_CSS,
-        )
-    )
+    # Depth for assets and root index link
+    depth = 0 if sec_key == "" else 1
+    root_index_rel = "../" * depth + "index.html" if depth > 0 else "index.html"
 
-    if section_key == "":
-        lines.append(f"<h1>{_escape_html(config.project.title)}</h1>")
-    else:
-        lines.append(f"<h1>{_escape_html(section_title)}</h1>")
-        lines.append(
-            f'<p><a href="../index.html">'
-            f"← Volver al índice de {_escape_html(config.project.title)}</a></p>"
-        )
+    # Breadcrumbs
+    breadcrumbs: list[dict[str, str]] = [
+        {"title": "Inicio", "href": root_index_rel},
+    ]
+    if sec_key:
+        breadcrumbs.append({"title": sec_title, "href": ""})
 
-    if doc_infos:
-        lines.append("<ul>")
-        for doc in doc_infos:
-            lines.append(
-                f'<li><a href="{_escape_attr(doc["href"])}">'
-                f"{_escape_html(doc['title'])}</a></li>"
+    # Build minimal section structure for sidebar.
+    # Use the same document ordering as the main section_documents list
+    # for consistency (alphabetical or YML order).
+    sections_ctx: list[dict] = []
+    for s in all_sections:
+        s_key: str = s["key"]
+        # Use pre-sorted docs if this is the current section, otherwise
+        # sort alphabetically (the typical case for multi-section projects).
+        if s_key == sec_key:
+            sorted_sdocs = docs
+        else:
+            sorted_sdocs = sorted(
+                s["documents"],
+                key=lambda sd: str(
+                    sd.frontmatter.get("title", sd.path.stem)
+                ).casefold(),
             )
-        lines.append("</ul>")
-    else:
-        lines.append("<p>No hay documentos en esta sección.</p>")
-
-    lines.append(_HTML_FOOTER)
-    return "\n".join(lines)
-
-
-def _render_yml_index(
-    sections: list[dict],
-    source_map: dict[str, SourceFile],
-    config: ProjectConfig,
-) -> str:
-    """Render a single index respecting explicit ``.index.yml`` sections."""
-    lines: list[str] = []
-    lines.append(
-        _HTML_HEADER.format(
-            lang=config.project.language,
-            title=f"{config.project.title} — Índice",
-            css=_CSS,
+        section_doc_infos: list[dict[str, str]] = []
+        for sdoc in sorted_sdocs:
+            info = _build_doc_slug_info(sdoc, config, sec_key)
+            section_doc_infos.append(info)
+        sections_ctx.append(
+            {
+                "title": s["title"],
+                "weight": s["weight"],
+                "key": s_key,
+                "documents": section_doc_infos,
+            }
         )
-    )
-    lines.append(f"<h1>{_escape_html(config.project.title)}</h1>")
 
-    for section in sections:
-        lines.append(f"<h2>{_escape_html(section['title'])}</h2>")
-        lines.append("<ul>")
-        for file_ref in section["files"]:
-            source = source_map.get(file_ref)
-            if source is None:
-                continue
-            doc = _build_doc_info(source, config)
-            lines.append(
-                f'<li><a href="{_escape_attr(doc["href"])}">'
-                f"{_escape_html(doc['title'])}</a></li>"
-            )
-        lines.append("</ul>")
-
-    lines.append(_HTML_FOOTER)
-    return "\n".join(lines)
+    return {
+        "project": {
+            "title": config.project.title,
+            "author": config.project.author,
+            "language": config.project.language,
+        },
+        "title": sec_title if sec_key else config.project.title,
+        "body": "",
+        "documents": doc_infos,
+        "sections": sections_ctx,
+        "assets": "../" * depth + "assets" if depth > 0 else "assets",
+        "breadcrumbs": breadcrumbs,
+        "section_documents": doc_infos,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Internal — HTML escaping
+# Internal — HTML escaping (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 

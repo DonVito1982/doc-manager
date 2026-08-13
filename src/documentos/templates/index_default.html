@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="{{ project.language }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — {{ project.title }}</title>
+    <link rel="stylesheet" href="{{ assets }}/css/style.css">
+    <script src="{{ assets }}/js/mathjax-config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+    <header>
+        <h1>{{ project.title }}</h1>
+        {% include 'partials/nav.html' %}
+    </header>
+    <main>
+        {% include 'partials/sidebar.html' %}
+        <article class="content">
+            {% raw %}$body${% endraw %}
+            {% if section_documents %}
+            <h2>Documentos en esta sección</h2>
+            <ul>
+                {% for doc in section_documents %}
+                <li><a href="{{ doc.slug }}">{{ doc.title }}</a></li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </article>
+    </main>
+    <footer>
+        <p>{{ project.author }}</p>
+    </footer>
+</body>
+</html>
