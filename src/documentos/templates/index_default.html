@@ -16,7 +16,7 @@
     <main>
         {% include 'partials/sidebar.html' %}
         <article class="content">
-            {% raw %}$body${% endraw %}
+            {{ body }}
             {% if section_documents %}
             <h2>Documentos en esta sección</h2>
             <ul>

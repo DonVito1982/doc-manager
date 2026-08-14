@@ -1573,12 +1573,13 @@ class TestBaseHtmlTemplate:
         assert "Tester" in rendered
 
     def test_body_placeholder_preserved(self, tmp_path: Path) -> None:
-        """The $body$ placeholder is preserved for Pandoc replacement."""
+        """The $body$ placeholder is rendered for Pandoc replacement."""
         config = _make_config(tmp_path)
         env = _create_jinja_env(config)
         rendered = env.get_template("base.html").render(
             project={"title": "T", "author": "A", "language": "es"},
             title="Doc",
+            body="$body$",
             documents=[],
             assets="assets",
         )
@@ -2338,12 +2339,13 @@ class TestIndexDefaultTemplate:
         assert "Documentos en esta sección" not in rendered
 
     def test_body_placeholder_preserved(self, tmp_path: Path) -> None:
-        """The $body$ placeholder is preserved for Pandoc replacement."""
+        """The $body$ placeholder is rendered for Pandoc replacement."""
         config = _make_config(tmp_path)
         env = _create_jinja_env(config)
         rendered = env.get_template("index_default.html").render(
             project={"title": "T", "author": "A", "language": "es"},
             title="Index",
+            body="$body$",
             documents=[],
             sections=[],
             assets="assets",

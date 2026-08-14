@@ -485,6 +485,7 @@ def _build_html_context(
             "language": config.project.language,
         },
         "title": source.frontmatter.get("title", source.path.stem),
+        "body": "$body$",
         "documents": doc_list,
         "sections": sections,
         "current_section": current_section,
