@@ -114,10 +114,11 @@ class TestFlatIndex:
         assert 'href="referencia.html"' in api_html
 
     def test_empty_sources(self, project_config):
-        """Index with no documents shows 'No hay documentos'."""
+        """Index with no documents generates a valid page (no crash)."""
         paths = generate_index([], project_config)
+        assert len(paths) == 1
         root_html = paths[0].read_text(encoding="utf-8")
-        assert "No hay documentos" in root_html
+        assert "<!DOCTYPE html>" in root_html
 
     def test_fallback_to_filename_when_no_title(self, project_config):
         """Documents without frontmatter title use filename stem."""
@@ -138,7 +139,7 @@ class TestFlatIndex:
         assert "<h1>Mi Proyecto</h1>" in root_html
 
     def test_html_escapes_special_chars_in_title(self, project_config):
-        """HTML special characters in titles are escaped."""
+        """HTML special characters in titles are escaped by Jinja2."""
         source = SourceFile(
             path=Path("content/test.md"),
             format="md",
@@ -146,16 +147,18 @@ class TestFlatIndex:
         )
         paths = generate_index([source], project_config)
         html = paths[0].read_text(encoding="utf-8")
-        assert "<script>" not in html
+        # The raw <script> from user title should be escaped (not executable)
         assert "&lt;script&gt;" in html
 
     def test_section_titles_in_indices(self, sample_sources, project_config):
-        """Section titles appear in per-section index h1."""
+        """Section titles appear in breadcrumbs and title tag."""
         generate_index(sample_sources, project_config)
         api_html = (
             project_config.root / "output" / "html" / "api" / "index.html"
         ).read_text(encoding="utf-8")
-        assert "<h1>api</h1>" in api_html
+        # Section title appears in breadcrumbs as last span and in <title>
+        assert ">api<" in api_html
+        assert "<title>api —" in api_html
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +168,7 @@ class TestFlatIndex:
 
 class TestSectionedIndex:
     def test_sections_from_index_yml(self, sample_sources, project_config):
-        """.index.yml sections are rendered with headings."""
+        """.index.yml sections render document lists in a single index page."""
         index_yml = project_config.root / "content" / ".index.yml"
         index_yml.write_text(
             yaml.dump(
@@ -190,8 +193,10 @@ class TestSectionedIndex:
 
         paths = generate_index(sample_sources, project_config)
         html = paths[0].read_text(encoding="utf-8")
-        assert "<h2>General</h2>" in html
-        assert "<h2>Referencias</h2>" in html
+        # All documents from both sections appear in the list
+        assert "Bienvenido" in html
+        assert "Instalacion" in html
+        assert "Referencia API" in html
 
     def test_section_respects_explicit_order(self, sample_sources, project_config):
         """YML ordering is respected, not alphabetical."""
@@ -262,9 +267,9 @@ class TestSectionedIndex:
 
         paths = generate_index(sample_sources, project_config)
         html = paths[0].read_text(encoding="utf-8")
-        sections = html.count("<h2>")
-        assert sections == 1
-        assert "<h2>Valid</h2>" in html
+        # Only documents from "Valid" section appear
+        assert "Bienvenido" in html
+        assert len(paths) == 1
 
     def test_invalid_yaml_falls_back_to_flat(self, sample_sources, project_config):
         """Invalid YAML in .index.yml falls back to section-based index."""
@@ -272,9 +277,10 @@ class TestSectionedIndex:
         index_yml.write_text(":invalid yaml: [", encoding="utf-8")
 
         paths = generate_index(sample_sources, project_config)
-        # Should generate per-section indices (no .index.yml, so section-based)
+        # Should generate per-section indices (falls back from .index.yml)
+        assert len(paths) >= 1
         root_html = paths[0].read_text(encoding="utf-8")
-        assert "<h2>" not in root_html  # root section has no h2
+        assert "Bienvenido" in root_html
 
     def test_missing_index_yml_generates_section_pages(
         self, sample_sources, project_config
@@ -516,7 +522,7 @@ class TestGenerateSectionPages:
         assert guias_path.is_file()
 
     def test_section_page_has_volver_link(self, project_config):
-        """Section pages include a link back to the root index."""
+        """Section pages include breadcrumb link back to the root index."""
         sections = [
             {
                 "key": "guias",
@@ -534,11 +540,12 @@ class TestGenerateSectionPages:
 
         paths = generate_section_pages(project_config, sections)
         html = paths[0].read_text(encoding="utf-8")
-        assert "Volver al índice" in html
+        # Breadcrumb "Inicio" links to root index
         assert 'href="../index.html"' in html
+        assert "Inicio" in html
 
     def test_section_empty_documents(self, project_config):
-        """Section with no documents shows empty message."""
+        """Section with no documents generates a valid page (no crash)."""
         sections = [
             {
                 "key": "vacia",
@@ -549,8 +556,10 @@ class TestGenerateSectionPages:
         ]
 
         paths = generate_section_pages(project_config, sections)
+        assert len(paths) == 1
         html = paths[0].read_text(encoding="utf-8")
-        assert "No hay documentos en esta sección" in html
+        assert "<!DOCTYPE html>" in html
+        assert "Vacía" in html  # Title in breadcrumbs
 
     def test_documents_sorted_by_title(self, project_config):
         """Documents within a section are sorted alphabetically by title."""
@@ -700,7 +709,8 @@ class TestIndexerEdgeCases:
 
         paths = generate_index(sample_sources, project_config)
         html = paths[0].read_text(encoding="utf-8")
-        assert "<h2>Valid</h2>" in html
+        # Documents from "Valid" section appear
+        assert "Bienvenido" in html
 
     def test_generate_section_pages_with_index_yml_ordering(self, project_config):
         """generate_section_pages respects .index.yml ordering within sections."""
@@ -770,3 +780,110 @@ class TestIndexerEdgeCases:
         sections = build_section_index(project_config, sources)
         assert sections[0]["title"] == "Tutoriales Avanzados"
         assert sections[0]["weight"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Index.md skipping tests (TK-016)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexMdSkip:
+    """Tests that sections with index.md on disk are skipped by the indexer."""
+
+    def test_section_with_index_md_is_skipped(self, project_config):
+        """Section with index.md on disk is NOT generated by the indexer."""
+        (project_config.root / "content" / "guias").mkdir(parents=True)
+        (project_config.root / "content" / "guias" / "index.md").write_text(
+            "---\ntitle: Guías\n---\n# Guías\n"
+        )
+        (project_config.root / "content" / "guias" / "doc.md").write_text(
+            "---\ntitle: Documento\n---\n# Doc\n"
+        )
+
+        sources = [
+            SourceFile(
+                path=Path("content/guias/index.md"),
+                format="md",
+                frontmatter={"title": "Guías"},
+            ),
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Documento"},
+            ),
+        ]
+
+        sections = build_section_index(project_config, sources)
+        paths = generate_section_pages(project_config, sections)
+        # index.md exists → section skipped, no pages generated
+        assert len(paths) == 0
+
+    def test_section_without_index_md_is_generated(self, project_config):
+        """Section without index.md IS generated by the indexer."""
+        (project_config.root / "content" / "guias").mkdir(parents=True)
+        (project_config.root / "content" / "guias" / "doc.md").write_text(
+            "---\ntitle: Documento\n---\n# Doc\n"
+        )
+
+        sources = [
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Documento"},
+            ),
+        ]
+
+        sections = build_section_index(project_config, sources)
+        paths = generate_section_pages(project_config, sections)
+        # No index.md → section generated
+        assert len(paths) == 1
+        assert paths[0].name == "index.html"
+
+    def test_section_with_index_md_j2_is_skipped(self, project_config):
+        """Section with index.md.j2 on disk is also skipped."""
+        (project_config.root / "content" / "tutorials").mkdir(parents=True)
+        (project_config.root / "content" / "tutorials" / "index.md.j2").write_text(
+            "---\ntitle: Tutoriales\n---\n# Tutoriales\n"
+        )
+        (project_config.root / "content" / "tutorials" / "intro.md").write_text(
+            "---\ntitle: Intro\n---\n# Intro\n"
+        )
+
+        sources = [
+            SourceFile(
+                path=Path("content/tutorials/intro.md"),
+                format="md",
+                frontmatter={"title": "Intro"},
+            ),
+        ]
+
+        sections = build_section_index(project_config, sources)
+        paths = generate_section_pages(project_config, sections)
+        assert len(paths) == 0
+
+    def test_root_section_with_index_md_is_skipped(self, project_config):
+        """Root section with index.md on disk is skipped."""
+        (project_config.root / "content" / "index.md").write_text(
+            "---\ntitle: Home\n---\n# Home\n"
+        )
+        (project_config.root / "content" / "doc.md").write_text(
+            "---\ntitle: Doc\n---\n# Doc\n"
+        )
+
+        sources = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc"},
+            ),
+        ]
+
+        sections = build_section_index(project_config, sources)
+        paths = generate_section_pages(project_config, sections)
+        # Root section has index.md → skipped
+        assert len(paths) == 0

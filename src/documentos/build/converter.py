@@ -134,7 +134,12 @@ def convert(
 
     results: list[ConvertedFile] = []
 
-    for fmt in config.output.formats:
+    # index.md files only generate HTML output
+    formats = list(config.output.formats)
+    if source.path.stem == "index":
+        formats = ["html"]
+
+    for fmt in formats:
         result = _convert_single(source, config, preprocessed, fmt, all_documents)
         results.append(result)
 
@@ -248,7 +253,10 @@ def _create_jinja_env(config: ProjectConfig) -> Environment:
 
     loaders.append(PackageLoader("documentos", "templates"))
 
-    return Environment(loader=ChoiceLoader(loaders))
+    return Environment(
+        loader=ChoiceLoader(loaders),
+        autoescape=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +465,19 @@ def _build_html_context(
     # Assets prefix: relative path from current doc to output/html/assets/
     assets_prefix = "../" * depth
 
+    # Add document title as last breadcrumb (no href — current page)
+    doc_title = source.frontmatter.get("title", source.path.stem)
+    breadcrumbs.append({"title": str(doc_title), "href": ""})
+
+    # Build section_documents list for index.md files
+    section_documents: list[dict[str, str]] = []
+    if source.path.stem == "index":
+        section_documents = [
+            {"slug": doc["slug"], "title": doc["title"]}
+            for doc in doc_list
+            if doc.get("section") == current_section
+        ]
+
     return {
         "project": {
             "title": config.project.title,
@@ -464,12 +485,14 @@ def _build_html_context(
             "language": config.project.language,
         },
         "title": source.frontmatter.get("title", source.path.stem),
+        "body": "$body$",
         "documents": doc_list,
         "sections": sections,
         "current_section": current_section,
         "section_title": section_title,
         "breadcrumbs": breadcrumbs,
         "assets": f"{assets_prefix}assets",
+        "section_documents": section_documents,
     }
 
 
@@ -526,7 +549,12 @@ def _convert_to_html(
     context = _build_html_context(source, config, all_documents)
 
     frontmatter_template: str | None = source.frontmatter.get("template")
-    template_name = frontmatter_template or "base.html"
+
+    # Detect index.md files → use index_default.html by default
+    if source.path.stem == "index":
+        template_name = frontmatter_template or "index_default.html"
+    else:
+        template_name = frontmatter_template or "base.html"
 
     try:
         rendered_template = env.get_template(template_name).render(**context)

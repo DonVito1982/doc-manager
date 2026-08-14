@@ -160,7 +160,7 @@ class TestConvertHappyPath:
     def test_epub_only(self, tmp_path: Path) -> None:
         """Convert to EPUB with mocked pypandoc.convert_file."""
         config = _make_config(tmp_path, formats=["epub"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -176,7 +176,7 @@ class TestConvertHappyPath:
         assert len(results) == 1
         assert results[0].success is True
         assert results[0].format == "epub"
-        assert results[0].output == Path("output/epub/index.epub")
+        assert results[0].output == Path("output/epub/doc.epub")
         mock_convert_file.assert_called_once()
         call_kwargs = mock_convert_file.call_args[1]
         assert call_kwargs["to"] == "epub"
@@ -187,7 +187,7 @@ class TestConvertHappyPath:
     def test_pdf_only(self, tmp_path: Path) -> None:
         """Convert to PDF with mocked pandoc and latexmk."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -209,7 +209,7 @@ class TestConvertHappyPath:
             # Simulate latexmk creating the PDF
             def _create_pdf(*args, **kwargs):
                 cwd = kwargs.get("cwd", ".")
-                (Path(cwd) / "index.pdf").write_text("PDF content", encoding="utf-8")
+                (Path(cwd) / "doc.pdf").write_text("PDF content", encoding="utf-8")
                 return MagicMock()
 
             mock_run.side_effect = _create_pdf
@@ -219,16 +219,16 @@ class TestConvertHappyPath:
         assert len(results) == 1
         assert results[0].success is True
         assert results[0].format == "pdf"
-        assert results[0].output == Path("output/pdf/index.pdf")
+        assert results[0].output == Path("output/pdf/doc.pdf")
 
     def test_all_three_formats(self, tmp_path: Path) -> None:
         """Convert to HTML, EPUB, and PDF simultaneously."""
         config = _make_config(tmp_path, formats=["html", "epub", "pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         def _create_pdf(*args, **kwargs):
             cwd = kwargs.get("cwd", ".")
-            (Path(cwd) / "index.pdf").write_text("PDF", encoding="utf-8")
+            (Path(cwd) / "doc.pdf").write_text("PDF", encoding="utf-8")
             return MagicMock()
 
         with (
@@ -287,7 +287,7 @@ class TestConvertHappyPath:
     def test_with_latex_template_from_config(self, tmp_path: Path) -> None:
         """Verify --template is passed from config.pdf.template."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         # Create a custom template
         custom_template = tmp_path / "custom.latex"
@@ -321,7 +321,7 @@ class TestConvertHappyPath:
     def test_with_latex_template_default(self, tmp_path: Path) -> None:
         """Verify latex-template.tex from templates dir is used as default."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         templates_dir = tmp_path / config.templates.dir
         templates_dir.mkdir(parents=True)
@@ -353,7 +353,7 @@ class TestConvertHappyPath:
     def test_with_pdf_header_and_footer(self, tmp_path: Path) -> None:
         """Verify header/footer variables are passed to Pandoc."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         config.pdf.header = "My Header"
         config.pdf.footer = "My Footer"
@@ -384,11 +384,11 @@ class TestConvertHappyPath:
     def test_pdf_saves_tex_file(self, tmp_path: Path) -> None:
         """Verify the intermediate .tex file is saved to output/tex/."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         def _create_pdf(*args, **kwargs):
             cwd = kwargs.get("cwd", ".")
-            (Path(cwd) / "index.pdf").write_text("PDF", encoding="utf-8")
+            (Path(cwd) / "doc.pdf").write_text("PDF", encoding="utf-8")
             return MagicMock()
 
         with (
@@ -411,7 +411,7 @@ class TestConvertHappyPath:
         ):
             convert(source, config, "# Test\n")
 
-        tex_file = tmp_path / "output/tex/index.tex"
+        tex_file = tmp_path / "output/tex/doc.tex"
         assert tex_file.is_file()
         tex_content = tex_file.read_text(encoding="utf-8")
         assert r"\documentclass" in tex_content
@@ -475,7 +475,7 @@ class TestConvertErrors:
     def test_latexmk_not_found_skips_pdf(self, tmp_path: Path, caplog) -> None:
         """When latexmk is missing, PDF is skipped but HTML/EPUB continue."""
         config = _make_config(tmp_path, formats=["html", "epub", "pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -532,7 +532,7 @@ class TestConvertErrors:
     def test_pypandoc_raises_during_epub_conversion(self, tmp_path: Path) -> None:
         """When pypandoc raises for EPUB, result is error but no crash."""
         config = _make_config(tmp_path, formats=["epub"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -555,7 +555,7 @@ class TestConvertErrors:
     ) -> None:
         """When latexmk fails, the PDF result has success=False."""
         config = _make_config(tmp_path, formats=["html", "pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -606,7 +606,7 @@ class TestConvertErrors:
     def test_tex_not_saved_when_latexmk_missing(self, tmp_path: Path, caplog) -> None:
         """When latexmk is missing, .tex file is NOT saved (early return)."""
         config = _make_config(tmp_path, formats=["pdf"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with (
             patch(
@@ -626,7 +626,7 @@ class TestConvertErrors:
         assert "latexmk" in results[0].error.lower()
 
         # The .tex file should NOT exist since we returned early
-        tex_file = tmp_path / "output/tex/index.tex"
+        tex_file = tmp_path / "output/tex/doc.tex"
         assert not tex_file.is_file()
 
 
@@ -731,7 +731,7 @@ class TestEpubMetadata:
     def test_epub_metadata_passed_to_pandoc(self, tmp_path: Path) -> None:
         """Verify the metadata file path is passed as --epub-metadata."""
         config = _make_config(tmp_path, formats=["epub"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
         config.project.title = "Test"
         config.project.author = "Tester"
         config.project.language = "en"
@@ -764,7 +764,7 @@ class TestEpubMetadata:
         """Verify the temp metadata file is removed after conversion."""
         config = _make_config(tmp_path, formats=["epub"])
         config.project.title = "Test"
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         metadata_paths: list[Path] = []
 
@@ -914,11 +914,11 @@ class TestConvertIntegration:
     def test_format_order_preserved(self, tmp_path: Path) -> None:
         """Results should appear in the order of config.output.formats."""
         config = _make_config(tmp_path, formats=["pdf", "html", "epub"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         def _create_pdf(*args, **kwargs):
             cwd = kwargs.get("cwd", ".")
-            (Path(cwd) / "index.pdf").write_text("PDF", encoding="utf-8")
+            (Path(cwd) / "doc.pdf").write_text("PDF", encoding="utf-8")
             return MagicMock()
 
         with (
@@ -1082,7 +1082,7 @@ class TestEdgeCases:
     def test_unsupported_format_in_config(self, tmp_path: Path) -> None:
         """An unsupported format in config returns error ConvertedFile."""
         config = _make_config(tmp_path, formats=["docx"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         with patch(
             "documentos.build.converter.pypandoc.get_pandoc_version",
@@ -1500,8 +1500,12 @@ class TestBuildHtmlContext:
         assert ctx["sections"] == []
         assert ctx["current_section"] == ""
         assert ctx["section_title"] == ""
-        assert ctx["breadcrumbs"] == [{"title": "Inicio", "href": "index.html"}]
+        assert ctx["breadcrumbs"] == [
+            {"title": "Inicio", "href": "index.html"},
+            {"title": "Welcome", "href": ""},
+        ]
         assert ctx["assets"] == "assets"
+        assert ctx["section_documents"] == []
 
     def test_context_with_documents(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
@@ -1529,9 +1533,12 @@ class TestBuildHtmlContext:
         assert len(ctx["sections"]) >= 1
         # current_section for index.md is root
         assert ctx["current_section"] == ""
-        # breadcrumbs for root document
-        assert len(ctx["breadcrumbs"]) == 1
+        # breadcrumbs now include document title as last crumb
+        assert len(ctx["breadcrumbs"]) == 2
         assert ctx["breadcrumbs"][0]["title"] == "Inicio"
+        assert ctx["breadcrumbs"][1]["title"] == "Home"
+        # section_documents for index.md files
+        assert ctx["section_documents"] is not None
 
     def test_context_title_fallback(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
@@ -1566,12 +1573,13 @@ class TestBaseHtmlTemplate:
         assert "Tester" in rendered
 
     def test_body_placeholder_preserved(self, tmp_path: Path) -> None:
-        """The $body$ placeholder is preserved for Pandoc replacement."""
+        """The $body$ placeholder is rendered for Pandoc replacement."""
         config = _make_config(tmp_path)
         env = _create_jinja_env(config)
         rendered = env.get_template("base.html").render(
             project={"title": "T", "author": "A", "language": "es"},
             title="Doc",
+            body="$body$",
             documents=[],
             assets="assets",
         )
@@ -1771,7 +1779,7 @@ class TestHtmlConversionWithTemplates:
     def test_user_base_html_overrides_packaged(self, tmp_path: Path) -> None:
         """A user-provided base.html is used instead of the packaged one."""
         config = _make_config(tmp_path, formats=["html"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/doc.md")
 
         user_dir = tmp_path / config.templates.dir
         user_dir.mkdir(parents=True)
@@ -2097,3 +2105,251 @@ class TestPerDocumentTemplatePdf:
         assert "missing.tex" in warning_text
         assert "content/doc.md" in warning_text
         assert "Falling back to default template" in warning_text
+
+
+# ---------------------------------------------------------------------------
+# Index.md convention tests (TK-016)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexMdConversion:
+    """Tests for index.md-specific converter behavior."""
+
+    def test_index_md_uses_index_default_template(self, tmp_path: Path) -> None:
+        """index.md files use index_default.html template, renders properly."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Section Index"}
+
+        captured_template: list[str] = []
+
+        def _capture(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture,
+            ),
+        ):
+            convert(source, config, "# Index\n")
+
+        assert len(captured_template) == 1
+        # The rendered template has basic HTML structure
+        assert "<!DOCTYPE html>" in captured_template[0]
+        assert "$body$" in captured_template[0]
+        assert "Section Index" in captured_template[0]
+
+    def test_index_md_only_generates_html(self, tmp_path: Path) -> None:
+        """index.md files skip PDF/EPUB formats, only generate HTML."""
+        config = _make_config(tmp_path, formats=["html", "pdf", "epub"])
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Index"}
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value="<html>OK</html>",
+            ),
+        ):
+            results = convert(source, config, "# Test\n")
+
+        # Only 1 result (HTML), not 3
+        assert len(results) == 1
+        assert results[0].format == "html"
+        assert results[0].success is True
+
+    def test_regular_doc_still_uses_base_html(self, tmp_path: Path) -> None:
+        """Non-index documents still use base.html template."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/doc.md")
+        source.frontmatter = {"title": "Regular Doc"}
+
+        captured_template: list[str] = []
+
+        def _capture(text, to, format, extra_args):
+            template_arg = next(a for a in extra_args if a.startswith("--template="))
+            tp = Path(template_arg.split("=", 1)[1])
+            captured_template.append(tp.read_text(encoding="utf-8"))
+            return "<html>OK</html>"
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=_capture,
+            ),
+        ):
+            convert(source, config, "# Test\n")
+
+        assert len(captured_template) == 1
+        # Regular base.html renders with basic HTML structure
+        assert "<!DOCTYPE html>" in captured_template[0]
+        assert "$body$" in captured_template[0]
+        assert "Regular Doc" in captured_template[0]
+
+    def test_index_md_section_documents_in_context(self, tmp_path: Path) -> None:
+        """section_documents is populated in context for index.md files."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/index.md")
+        source.frontmatter = {"title": "Home"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/index.md"),
+                format="md",
+                frontmatter={"title": "Home"},
+            ),
+            SourceFile(
+                path=Path("content/about.md"),
+                format="md",
+                frontmatter={"title": "About"},
+            ),
+        ]
+
+        ctx = _build_html_context(source, config, all_docs)
+        assert len(ctx["section_documents"]) == 2
+        titles = {d["title"] for d in ctx["section_documents"]}
+        assert "Home" in titles
+        assert "About" in titles
+
+    def test_non_index_md_no_section_documents(self, tmp_path: Path) -> None:
+        """section_documents is empty for non-index.md files."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/about.md")
+        source.frontmatter = {"title": "About"}
+
+        ctx = _build_html_context(source, config, None)
+        assert ctx["section_documents"] == []
+
+
+class TestBreadcrumbDocTitle:
+    """Tests for document title in breadcrumbs."""
+
+    def test_document_title_in_breadcrumbs(self, tmp_path: Path) -> None:
+        """Document title is the last breadcrumb item."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/doc.md")
+        source.frontmatter = {"title": "My Document"}
+
+        ctx = _build_html_context(source, config, None)
+        assert len(ctx["breadcrumbs"]) >= 1
+        last = ctx["breadcrumbs"][-1]
+        assert last["title"] == "My Document"
+        assert last["href"] == ""  # current page, no link
+
+    def test_section_index_breadcrumbs(self, tmp_path: Path) -> None:
+        """index.md in a section has section breadcrumb with link."""
+        config = _make_config(tmp_path)
+        source = _make_source_file("content/guias/doc.md")
+        source.frontmatter = {"title": "Guide Doc"}
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Guide Doc"},
+            ),
+        ]
+
+        ctx = _build_html_context(source, config, all_docs)
+        # Should have: Inicio, guias (linked), Guide Doc
+        assert len(ctx["breadcrumbs"]) == 3
+        assert ctx["breadcrumbs"][0]["title"] == "Inicio"
+        assert ctx["breadcrumbs"][0]["href"] == "../index.html"
+        assert ctx["breadcrumbs"][1]["title"] == "guias"
+        assert ctx["breadcrumbs"][1]["href"] == "index.html"
+        assert ctx["breadcrumbs"][2]["title"] == "Guide Doc"
+
+
+class TestIndexDefaultTemplate:
+    """Tests for the index_default.html Jinja2 template."""
+
+    def test_renders_html5_structure(self, tmp_path: Path) -> None:
+        """The template renders valid HTML5 with expected elements."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("index_default.html").render(
+            project={"title": "Test Project", "author": "Tester", "language": "es"},
+            title="Section Index",
+            documents=[],
+            sections=[],
+            assets="assets",
+            breadcrumbs=[{"title": "Inicio", "href": "index.html"}],
+            section_documents=[],
+        )
+        assert "<!DOCTYPE html>" in rendered
+        assert '<html lang="es">' in rendered
+        assert "<title>Section Index — Test Project</title>" in rendered
+        assert "<header>" in rendered
+        assert "<main>" in rendered
+        assert "<footer>" in rendered
+        assert "Tester" in rendered
+
+    def test_section_documents_rendered_as_links(self, tmp_path: Path) -> None:
+        """section_documents are rendered as document links."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("index_default.html").render(
+            project={"title": "Test", "author": "A", "language": "es"},
+            title="Guías",
+            documents=[],
+            sections=[],
+            assets="../assets",
+            breadcrumbs=[
+                {"title": "Inicio", "href": "../index.html"},
+                {"title": "Guías", "href": ""},
+            ],
+            section_documents=[
+                {"title": "Instalación", "slug": "instalacion.html"},
+                {"title": "Configuración", "slug": "configuracion.html"},
+            ],
+        )
+        assert "<h2>Documentos en esta sección</h2>" in rendered
+        assert '<a href="instalacion.html">Instalación</a>' in rendered
+        assert '<a href="configuracion.html">Configuración</a>' in rendered
+
+    def test_empty_section_documents_no_list(self, tmp_path: Path) -> None:
+        """Empty section_documents does not render the document list."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("index_default.html").render(
+            project={"title": "Test", "author": "A", "language": "es"},
+            title="Empty Section",
+            documents=[],
+            sections=[],
+            assets="assets",
+            breadcrumbs=[{"title": "Inicio", "href": "index.html"}],
+            section_documents=[],
+        )
+        assert "Documentos en esta sección" not in rendered
+
+    def test_body_placeholder_preserved(self, tmp_path: Path) -> None:
+        """The $body$ placeholder is rendered for Pandoc replacement."""
+        config = _make_config(tmp_path)
+        env = _create_jinja_env(config)
+        rendered = env.get_template("index_default.html").render(
+            project={"title": "T", "author": "A", "language": "es"},
+            title="Index",
+            body="$body$",
+            documents=[],
+            sections=[],
+            assets="assets",
+            breadcrumbs=[{"title": "Inicio", "href": "index.html"}],
+            section_documents=[],
+        )
+        assert "$body$" in rendered
