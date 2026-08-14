@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 from documentos.build.collector import SourceFile
 from documentos.build.indexer import (
+    _escape_attr,
+    _escape_html,
+    _generate_from_index_yml,
+    _parse_index_yml,
+    _parse_section_meta,
     build_section_index,
     generate_index,
     generate_section_pages,
@@ -887,3 +893,138 @@ class TestIndexMdSkip:
         paths = generate_section_pages(project_config, sections)
         # Root section has index.md → skipped
         assert len(paths) == 0
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageGaps:
+    """Tests targeting specific uncovered lines for full coverage."""
+
+    def test_parse_section_meta_malformed_frontmatter(self, project_config):
+        """Malformed _index.md frontmatter is caught and returns empty dict
+        (lines 238-239)."""
+        section_dir = project_config.root / "content" / "broken"
+        section_dir.mkdir(parents=True)
+        (section_dir / "_index.md").write_text("---\ntitle: [broken\n---\n")
+
+        result = _parse_section_meta(project_config, "broken")
+        assert result == {}
+
+    def test_build_section_index_invalid_weight(
+        self, project_config
+    ):
+        """Invalid weight in _index.md falls back to default 999
+        (lines 104-105)."""
+        section_dir = project_config.root / "content" / "invalid"
+        section_dir.mkdir(parents=True)
+        (section_dir / "_index.md").write_text(
+            "---\ntitle: Invalid Weight\nweight: not-a-number\n---\n"
+        )
+
+        sources = [
+            SourceFile(
+                path=Path("content/invalid/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc"},
+            ),
+        ]
+        sections = build_section_index(project_config, sources)
+        assert sections[0]["weight"] == 999
+
+    def test_parse_index_yml_files_not_list(self, project_config):
+        """If a section's 'files' is not a list, it is reset to [] (line 275)."""
+        index_yml = project_config.root / "content" / ".index.yml"
+        index_yml.write_text(
+            yaml.dump({"sections": [{"title": "S1", "files": "not_a_list"}]}),
+            encoding="utf-8",
+        )
+
+        result = _parse_index_yml(index_yml)
+        assert result == []  # filtered because files is empty
+
+    def test_parse_index_yml_section_not_dict(self, project_config):
+        """Non-dict entries in sections list are skipped."""
+        index_yml = project_config.root / "content" / ".index.yml"
+        index_yml.write_text(
+            yaml.dump({"sections": ["not_a_dict"]}),
+            encoding="utf-8",
+        )
+
+        result = _parse_index_yml(index_yml)
+        assert result == []
+
+    def test_generate_section_pages_render_failure(self, project_config):
+        """Jinja2 render failure raises RuntimeError (lines 195-196)."""
+        section_dir = project_config.root / "content" / "guias"
+        section_dir.mkdir(parents=True)
+        (section_dir / "doc.md").write_text("# Doc")
+
+        sources = [
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc"},
+            ),
+        ]
+        sections = build_section_index(project_config, sources)
+
+        with patch(
+            "documentos.build.indexer._create_jinja_env",
+        ) as mock_env_factory:
+            mock_env = MagicMock()
+            mock_env.get_template.return_value.render.side_effect = ValueError(
+                "bad render"
+            )
+            mock_env_factory.return_value = mock_env
+
+            with pytest.raises(
+                RuntimeError, match="Failed to render index for section"
+            ):
+                generate_section_pages(project_config, sections)
+
+    def test_generate_from_index_yml_render_failure(
+        self, project_config, sample_sources
+    ):
+        """Jinja2 render failure in _generate_from_index_yml raises
+        RuntimeError (lines 335-336)."""
+        index_yml = project_config.root / "content" / ".index.yml"
+        index_yml.write_text(
+            yaml.dump(
+                {
+                    "sections": [
+                        {"title": "Main", "files": ["content/index.md"]},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "documentos.build.indexer._create_jinja_env",
+        ) as mock_env_factory:
+            mock_env = MagicMock()
+            mock_env.get_template.return_value.render.side_effect = ValueError(
+                "bad render"
+            )
+            mock_env_factory.return_value = mock_env
+
+            with pytest.raises(
+                RuntimeError, match="Failed to render .index.yml index"
+            ):
+                _generate_from_index_yml(sample_sources, project_config, index_yml)
+
+    def test_escape_html(self) -> None:
+        """_escape_html escapes HTML special characters (line 521)."""
+        result = _escape_html('<script>alert("XSS")</script>')
+        assert "&lt;" in result
+        assert "&gt;" in result
+        assert "&quot;" in result
+        assert "<script>" not in result
+
+    def test_escape_attr(self) -> None:
+        """_escape_attr delegates to _escape_html (line 531)."""
+        result = _escape_attr('test"value')
+        assert "&quot;" in result

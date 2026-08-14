@@ -818,3 +818,240 @@ class TestLegacy:
         assert "init" in result.output
         assert "build" in result.output
         assert "serve" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCoverageGaps:
+    """Tests targeting uncovered lines in cli.py build command."""
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    @patch("documentos.cli.load_data_files", side_effect=OSError("cannot read dir"))
+    def test_build_data_load_error(
+        self,
+        mock_data,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """load_data_files exception is caught and shown as warning
+        (lines 167-170)."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "error" in result.output.lower()
+            assert "cannot read dir" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    @patch(
+        "documentos.cli.execute_db_queries",
+        side_effect=OSError("db connection failed"),
+    )
+    def test_build_db_query_error(
+        self,
+        mock_db,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """execute_db_queries exception is caught and shown as warning
+        (lines 178-181)."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "error" in result.output.lower()
+            assert "db connection failed" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.convert", return_value=[_SUCCESS_HTML])
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_preprocess_error(
+        self,
+        mock_index,
+        mock_assets,
+        mock_convert,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """preprocess exception is caught and reported as error
+        (lines 198-202)."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+        # Add an extra file that will fail preprocess
+        (proj / "content" / "bad_file.md").write_text("# Bad File\n")
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            # Mock preprocess to fail only for bad_file.md
+            with patch(
+                "documentos.cli.preprocess",
+                side_effect=lambda s, ctx: (
+                    (_ for _ in ()).throw(ValueError("template error"))
+                    if "bad_file" in str(s.path)
+                    else "preprocessed ok"
+                ),
+            ):
+                result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "✗" in result.output
+            assert "error de preprocesamiento" in result.output
+            assert "Errores: 1" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    @patch(
+        "documentos.cli.convert",
+        side_effect=ValueError("unexpected converter error"),
+    )
+    def test_build_unexpected_conversion_error(
+        self,
+        mock_convert,
+        mock_index,
+        mock_assets,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """Non-RuntimeError convert exception is caught (lines 215-219)."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            result = runner.invoke(main, ["build"])
+            assert result.exit_code == 0
+            assert "✗" in result.output
+            assert "error inesperado" in result.output
+            assert "Errores: 1" in result.output
+        finally:
+            os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_many_warnings(
+        self,
+        mock_index,
+        mock_assets,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """When there are >5 warnings, the truncation message is shown
+        (line 619)."""
+        failures = [
+            ConvertedFile(
+                source=Path(f"content/doc{i}.md"),
+                format="pdf",
+                output=Path(f"output/pdf/doc{i}.pdf"),
+                success=False,
+                error=f"PDF skipped {i}",
+            )
+            for i in range(10)
+        ]
+
+        with patch("documentos.cli.convert", return_value=failures):
+            proj = tmp_path / "proyecto"
+            proj.mkdir()
+            for d in ("content", "data", "templates"):
+                (proj / d).mkdir()
+            _init_project(proj, runner)
+
+            cwd = os.getcwd()
+            try:
+                os.chdir(proj)
+                result = runner.invoke(main, ["build"])
+                assert result.exit_code == 0
+                assert "Advertencias: 10" in result.output
+                assert "... y 5 más" in result.output
+            finally:
+                os.chdir(cwd)
+
+    @patch("documentos.cli.pypandoc.get_pandoc_version", return_value="3.1")
+    @patch("documentos.cli.copy_assets", return_value=[])
+    @patch("documentos.cli.generate_index", return_value=Path("/fake/index.html"))
+    def test_build_many_errors(
+        self,
+        mock_index,
+        mock_assets,
+        mock_pandoc,
+        runner: CliRunner,
+        tmp_path: Path,
+    ):
+        """When there are >5 errors, the truncation message is shown
+        (line 625)."""
+        proj = tmp_path / "proyecto"
+        proj.mkdir()
+        for d in ("content", "data", "templates"):
+            (proj / d).mkdir()
+        _init_project(proj, runner)
+
+        # Create 10 source files that will all fail preprocess
+        for i in range(10):
+            (proj / "content" / f"extra{i}.md").write_text("# Doc")
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(proj)
+            # Only fail for extra* files; index.md passes
+            with patch(
+                "documentos.cli.preprocess",
+                side_effect=lambda s, ctx: (
+                    (_ for _ in ()).throw(ValueError("fail"))
+                    if "extra" in str(s.path)
+                    else "preprocessed ok"
+                ),
+            ), patch("documentos.cli.convert", return_value=[]):
+                result = runner.invoke(main, ["build"])
+                assert "Errores: 10" in result.output
+                assert "... y 5 más" in result.output
+        finally:
+            os.chdir(cwd)

@@ -455,3 +455,15 @@ def test_load_config_data_queries_is_string(tmp_path: Path) -> None:
     _create_required_dirs(tmp_path)
     cfg = load_config(config_path)
     assert cfg.database.data_queries == []
+
+
+def test_load_config_assets_extra_dirs_not_list(tmp_path: Path) -> None:
+    """If assets.extra_dirs is not a list, fall back to empty list (line 355)."""
+    config_path = tmp_path / "config.yml"
+    _write_yaml(
+        config_path,
+        'project:\n  title: "Test"\nassets:\n  extra_dirs: not_a_list\n',
+    )
+    _create_required_dirs(tmp_path)
+    cfg = load_config(config_path)
+    assert cfg.assets.extra_dirs == []
