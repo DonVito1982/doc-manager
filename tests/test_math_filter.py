@@ -366,17 +366,10 @@ class TestMainGuard:
         input_json = json.dumps(ast)
 
         result = subprocess.run(
-            [
-                "python",
-                "-c",
-                "import runpy, json, sys; "
-                "sys.stdin = open('/dev/stdin'); "
-                "runpy.run_module('documentos.build.math_filter', run_name='__main__')",
-            ],
+            [sys.executable, "-m", "documentos.build.math_filter"],
             input=input_json,
             capture_output=True,
             text=True,
-            cwd="/home/donvito/Documents/clientes/open_source/gestor-v2/gestor-docs",
         )
 
         assert result.returncode == 0
