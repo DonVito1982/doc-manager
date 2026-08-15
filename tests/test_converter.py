@@ -14,11 +14,13 @@ from documentos.build.converter import (
     ConvertedFile,
     _build_document_list,
     _build_html_context,
+    _build_section_structure,
     _create_jinja_env,
     _escape_xml,
     _generate_epub_metadata,
     _make_output_path,
     _resolve_latex_template_path,
+    _resolve_math_filter_path,
     convert,
 )
 from documentos.config import ProjectConfig
@@ -2003,7 +2005,7 @@ class TestEpubMathjax:
     def test_epub_receives_mathjax_flag(self, tmp_path: Path) -> None:
         """Verify --mathjax is passed to pypandoc for EPUB conversion."""
         config = _make_config(tmp_path, formats=["epub"])
-        source = _make_source_file("content/index.md")
+        source = _make_source_file("content/epub_test.md")
         config.project.title = "Test"
         config.project.author = "Tester"
         config.project.language = "en"
@@ -2432,3 +2434,230 @@ class TestIndexDefaultTemplate:
             section_documents=[],
         )
         assert "$body$" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageGaps:
+    """Tests targeting specific uncovered lines for full coverage."""
+
+    def test_make_output_path_empty_name(self, tmp_path: Path) -> None:
+        """_make_output_path: when name_without_suffix is empty (line 223)."""
+        config = _make_config(tmp_path, formats=["html"])
+        # A file named just ".md" results in empty name_without_suffix
+        # Path(".md").stem is ".md" (dotfile, whole name is the stem)
+        source = _make_source_file("content/.md", fmt="md")
+        result = _make_output_path(source, config, "html")
+        assert result == Path("output/html/.md.html")
+
+    def test_build_section_structure_malformed_frontmatter(
+        self, tmp_path: Path
+    ) -> None:
+        """Malformed _index.md frontmatter is caught silently (lines 361-367)."""
+        config = _make_config(tmp_path)
+        (tmp_path / "content" / "guias").mkdir(parents=True)
+        (tmp_path / "content" / "guias" / "_index.md").write_text(
+            "---\ntitle: [broken\n---\n"
+        )
+        (tmp_path / "content" / "guias" / "doc.md").write_text("# Doc")
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc"},
+            ),
+        ]
+        sections = _build_section_structure(all_docs, config)
+        assert len(sections) == 1
+        assert sections[0]["title"] == "guias"  # fallback to dir name
+
+    def test_build_section_structure_invalid_weight(
+        self, tmp_path: Path
+    ) -> None:
+        """Invalid weight in _index.md falls back to default (lines 377-378)."""
+        config = _make_config(tmp_path)
+        (tmp_path / "content" / "guias").mkdir(parents=True)
+        (tmp_path / "content" / "guias" / "_index.md").write_text(
+            "---\nweight: not-a-number\n---\n"
+        )
+        (tmp_path / "content" / "guias" / "doc.md").write_text("# Doc")
+
+        all_docs = [
+            SourceFile(
+                path=Path("content/guias/doc.md"),
+                format="md",
+                frontmatter={"title": "Doc"},
+            ),
+        ]
+        sections = _build_section_structure(all_docs, config)
+        assert len(sections) == 1
+        assert sections[0]["weight"] == 999  # non-root default
+
+    def test_resolve_math_filter_not_found(self) -> None:
+        """Math filter not found raises RuntimeError (line 518)."""
+        import importlib.resources
+
+        with patch.object(
+            importlib.resources,
+            "files",
+            return_value=Path("/nonexistent/math_filter.py"),
+        ):
+            with pytest.raises(
+                RuntimeError, match="Packaged math filter not found"
+            ):
+                _resolve_math_filter_path()
+
+    def test_html_template_render_failure(self, tmp_path: Path) -> None:
+        """Jinja2 template render failure caught by _convert_single,
+        RuntimeError raised internally (lines 570-571)."""
+        config = _make_config(tmp_path, formats=["html"])
+        source = _make_source_file("content/doc.md")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter._create_jinja_env",
+            ) as mock_env_factory,
+        ):
+            mock_env = MagicMock()
+            mock_env.get_template.return_value.render.side_effect = ValueError(
+                "bad template"
+            )
+            mock_env_factory.return_value = mock_env
+
+            results = convert(source, config, "# Test\n")
+            assert len(results) == 1
+            assert results[0].success is False
+            assert "Failed to render HTML template" in results[0].error
+
+    def test_resolve_latex_template_none(self, tmp_path: Path) -> None:
+        """No LaTeX template found returns None (line 697)."""
+        config = _make_config(tmp_path)
+        config.pdf.template = None
+
+        # Ensure no packaged template can be found
+        import importlib.resources
+
+        with patch.object(
+            importlib.resources,
+            "files",
+            return_value=Path("/nonexistent"),
+        ):
+            result = _resolve_latex_template_path(config)
+            assert result is None
+
+    def test_latex_conversion_runtime_error(self, tmp_path: Path) -> None:
+        """Pandoc LaTeX conversion RuntimeError is caught and re-raised
+        (lines 789-790)."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/doc.md")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                side_effect=RuntimeError("LaTeX conversion failed"),
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+        ):
+            results = convert(source, config, "# Test\n")
+            assert results[0].success is False
+            assert "LaTeX conversion failed" in results[0].error
+
+    def test_latexmk_called_process_error(self, tmp_path: Path) -> None:
+        """latexmk CalledProcessError raises RuntimeError (line 819)."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/doc.md")
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+                side_effect=__import__("subprocess").CalledProcessError(
+                    1, "latexmk", stderr=b"Fatal error"
+                ),
+            ),
+        ):
+            results = convert(source, config, "# Test\n")
+            assert results[0].success is False
+            assert "latexmk failed" in results[0].error
+
+    def test_shutil_move_oserror(self, tmp_path: Path) -> None:
+        """shutil.move OSError raises RuntimeError (lines 830-831)."""
+        config = _make_config(tmp_path, formats=["pdf"])
+        source = _make_source_file("content/doc.md")
+
+        def _run_create_pdf(*args, **kwargs):
+            cwd = kwargs.get("cwd", ".")
+            (Path(cwd) / "doc.pdf").write_text("PDF", encoding="utf-8")
+            return MagicMock()
+
+        with (
+            patch(
+                "documentos.build.converter.pypandoc.get_pandoc_version",
+                return_value="3.1.2",
+            ),
+            patch(
+                "documentos.build.converter.pypandoc.convert_text",
+                return_value=r"\documentclass{article}\begin{document}T\end{document}",
+            ),
+            patch(
+                "documentos.build.converter.shutil.which",
+                return_value="/usr/bin/latexmk",
+            ),
+            patch(
+                "documentos.build.converter.subprocess.run",
+                side_effect=_run_create_pdf,
+            ),
+            patch(
+                "documentos.build.converter.shutil.move",
+                side_effect=OSError("Permission denied"),
+            ),
+        ):
+            results = convert(source, config, "# Test\n")
+            assert results[0].success is False
+            assert "Failed to move PDF" in results[0].error
+
+    def test_epub_metadata_render_failure(self, tmp_path: Path) -> None:
+        """EPUB metadata template render failure raises RuntimeError
+        (lines 869-870)."""
+        config = _make_config(tmp_path)
+        config.project.title = "Test"
+
+        with patch(
+            "documentos.build.converter._create_jinja_env",
+        ) as mock_env_factory:
+            mock_env = MagicMock()
+            mock_env.get_template.return_value.render.side_effect = ValueError(
+                "bad template"
+            )
+            mock_env_factory.return_value = mock_env
+
+            with pytest.raises(
+                RuntimeError, match="Failed to render EPUB metadata template"
+            ):
+                _generate_epub_metadata(config)

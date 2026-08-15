@@ -347,3 +347,31 @@ class TestIntegration:
 
         output = json.loads(mock_stdout.getvalue())
         assert output == ast
+
+
+class TestMainGuard:
+    """Test the ``if __name__ == '__main__'`` guard (line 81)."""
+
+    def test_main_guard_executed(self) -> None:
+        """Running the module as __main__ invokes main() correctly."""
+        import subprocess
+
+        ast = {
+            "pandoc-api-version": [1, 23],
+            "meta": {},
+            "blocks": [
+                {"t": "Para", "c": [{"t": "Str", "c": "hello"}]},
+            ],
+        }
+        input_json = json.dumps(ast)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "documentos.build.math_filter"],
+            input=input_json,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0
+        output = json.loads(result.stdout)
+        assert output["blocks"] == ast["blocks"]
