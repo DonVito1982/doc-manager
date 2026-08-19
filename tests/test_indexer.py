@@ -913,9 +913,7 @@ class TestCoverageGaps:
         result = _parse_section_meta(project_config, "broken")
         assert result == {}
 
-    def test_build_section_index_invalid_weight(
-        self, project_config
-    ):
+    def test_build_section_index_invalid_weight(self, project_config):
         """Invalid weight in _index.md falls back to default 999
         (lines 104-105)."""
         section_dir = project_config.root / "content" / "invalid"
@@ -1011,9 +1009,7 @@ class TestCoverageGaps:
             )
             mock_env_factory.return_value = mock_env
 
-            with pytest.raises(
-                RuntimeError, match="Failed to render .index.yml index"
-            ):
+            with pytest.raises(RuntimeError, match="Failed to render .index.yml index"):
                 _generate_from_index_yml(sample_sources, project_config, index_yml)
 
     def test_escape_html(self) -> None:
