@@ -2475,9 +2475,7 @@ class TestCoverageGaps:
         assert len(sections) == 1
         assert sections[0]["title"] == "guias"  # fallback to dir name
 
-    def test_build_section_structure_invalid_weight(
-        self, tmp_path: Path
-    ) -> None:
+    def test_build_section_structure_invalid_weight(self, tmp_path: Path) -> None:
         """Invalid weight in _index.md falls back to default (lines 377-378)."""
         config = _make_config(tmp_path)
         (tmp_path / "content" / "guias").mkdir(parents=True)
@@ -2506,9 +2504,7 @@ class TestCoverageGaps:
             "files",
             return_value=Path("/nonexistent/math_filter.py"),
         ):
-            with pytest.raises(
-                RuntimeError, match="Packaged math filter not found"
-            ):
+            with pytest.raises(RuntimeError, match="Packaged math filter not found"):
                 _resolve_math_filter_path()
 
     def test_html_template_render_failure(self, tmp_path: Path) -> None:

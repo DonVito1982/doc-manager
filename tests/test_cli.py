@@ -1042,14 +1042,17 @@ class TestBuildCoverageGaps:
         try:
             os.chdir(proj)
             # Only fail for extra* files; index.md passes
-            with patch(
-                "documentos.cli.preprocess",
-                side_effect=lambda s, ctx: (
-                    (_ for _ in ()).throw(ValueError("fail"))
-                    if "extra" in str(s.path)
-                    else "preprocessed ok"
+            with (
+                patch(
+                    "documentos.cli.preprocess",
+                    side_effect=lambda s, ctx: (
+                        (_ for _ in ()).throw(ValueError("fail"))
+                        if "extra" in str(s.path)
+                        else "preprocessed ok"
+                    ),
                 ),
-            ), patch("documentos.cli.convert", return_value=[]):
+                patch("documentos.cli.convert", return_value=[]),
+            ):
                 result = runner.invoke(main, ["build"])
                 assert "Errores: 10" in result.output
                 assert "... y 5 más" in result.output
